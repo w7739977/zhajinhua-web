@@ -150,7 +150,8 @@ function sanitizeRoom(room) {
       hasDealt: p.hasDealt,
       card: p.card,
       bet: p.bet,
-      score: p.score
+      score: p.score,
+      isMock: p.isMock || false
     }))
   };
 }
@@ -489,6 +490,103 @@ app.post('/api/resetRound', (req, res) => {
   } catch (err) {
     console.error('resetRound error:', err);
     res.json({ ok: false, code: 'RESET_FAILED', message: err.message });
+  }
+});
+
+app.post('/api/mockRoomAction', (req, res) => {
+  try {
+    const { playerId, roomId: rawRoomId, action } = req.body;
+    if (!playerId) return res.json({ ok: false, code: 'NO_PLAYER_ID', message: '缺少玩家ID' });
+
+    const roomId = String(rawRoomId || '').trim();
+    if (!roomId) return res.json({ ok: false, code: 'ROOM_ID_EMPTY', message: '房间号为空' });
+    if (!action) return res.json({ ok: false, code: 'ACTION_EMPTY', message: '缺少测试动作' });
+
+    const room = roomStore.get(roomId);
+    if (!room) return res.json({ ok: false, code: 'ROOM_NOT_FOUND', message: '房间不存在' });
+
+    if (room.ownerOpenId !== playerId) {
+      return res.json({ ok: false, code: 'ONLY_OWNER_ALLOWED', message: '仅房主可操作测试面板' });
+    }
+
+    const mockNames = ['测试A', '测试B', '测试C', '测试D', '测试E', '测试F', '测试G'];
+
+    if (action === 'setupMocks') {
+      const realPlayers = room.players.filter(p => !p.isMock).map(p => ({
+        ...p, hasDealt: false, card: null, bet: null
+      }));
+      const mockPlayers = mockNames.map((name, i) => ({
+        openId: `mock-player-${String.fromCharCode(97 + i)}`,
+        nickName: name, avatarUrl: '', isMock: true,
+        hasDealt: false, card: null, bet: null, score: 0
+      }));
+      room.players = realPlayers.concat(mockPlayers);
+      room.deck = shuffle(createDeck());
+      room.publicCard = null;
+      room.status = 'waiting';
+      room.roundResult = null;
+      room.updatedAt = new Date();
+      broadcastRoom(roomId);
+      return res.json({ ok: true, room: sanitizeRoom(room) });
+    }
+
+    if (action === 'clearMocks') {
+      room.players = room.players.filter(p => !p.isMock).map(p => ({
+        ...p, hasDealt: false, card: null, bet: null
+      }));
+      room.deck = shuffle(createDeck());
+      room.publicCard = null;
+      room.status = 'waiting';
+      room.roundResult = null;
+      room.updatedAt = new Date();
+      broadcastRoom(roomId);
+      return res.json({ ok: true, room: sanitizeRoom(room) });
+    }
+
+    if (!room.players.some(p => p.isMock)) {
+      return res.json({ ok: false, code: 'NO_MOCK_PLAYERS', message: '请先添加模拟玩家' });
+    }
+
+    if (action === 'mockDealOthers') {
+      const deck = room.deck;
+      if (!deck.length) return res.json({ ok: false, code: 'DECK_EMPTY', message: '牌已经发完' });
+
+      room.players.forEach(p => {
+        if (p.isMock && !p.hasDealt && deck.length) {
+          p.card = deck.shift();
+          p.hasDealt = true;
+        }
+      });
+
+      const allDealt = room.players.every(p => p.hasDealt);
+      if (allDealt && !room.publicCard && deck.length) room.publicCard = deck.shift();
+      room.status = allDealt ? 'betting' : 'dealing';
+      room.updatedAt = new Date();
+      broadcastRoom(roomId);
+      return res.json({ ok: true, room: sanitizeRoom(room) });
+    }
+
+    if (action === 'mockBetOthers') {
+      if (room.status !== 'betting') return res.json({ ok: false, code: 'NOT_BETTING', message: '当前不在下注阶段' });
+
+      const dealerOpenId = room.dealerOpenId || room.ownerOpenId;
+      room.players.forEach(p => {
+        if (p.isMock && p.bet == null && p.openId !== dealerOpenId) {
+          p.bet = Math.floor(Math.random() * 3) + 1;
+        }
+      });
+
+      const nonDealer = room.players.filter(p => p.openId !== dealerOpenId);
+      room.status = nonDealer.every(p => p.bet != null) ? 'opening' : 'betting';
+      room.updatedAt = new Date();
+      broadcastRoom(roomId);
+      return res.json({ ok: true, room: sanitizeRoom(room) });
+    }
+
+    res.json({ ok: false, code: 'UNKNOWN_ACTION', message: '未知测试动作' });
+  } catch (err) {
+    console.error('mockRoomAction error:', err);
+    res.json({ ok: false, code: 'MOCK_ACTION_FAILED', message: err.message });
   }
 });
 

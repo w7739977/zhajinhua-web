@@ -20,6 +20,7 @@
 | `cloudfunctions/bet/index.js` | `server.js` → `POST /api/bet` | 下注 |
 | `cloudfunctions/open/index.js` | `server.js` → `POST /api/open` | 开牌（含牌型引擎） |
 | `cloudfunctions/resetRound/index.js` | `server.js` → `POST /api/resetRound` | 新一局 |
+| `cloudfunctions/mockRoomAction/index.js` | `server.js` → `POST /api/mockRoomAction` | 测试面板（仅 test 分支） |
 
 > **改动规则**：修改任何云函数的业务逻辑时，必须同步修改 `server.js` 中对应的路由处理函数。
 
