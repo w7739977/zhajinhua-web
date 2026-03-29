@@ -1,0 +1,14 @@
+{
+  "name": "zhajinhua-web",
+  "version": "1.0.0",
+  "description": "诈金花 Web 版 - 不依赖微信小程序",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "socket.io": "^4.7.5"
+  }
+}
