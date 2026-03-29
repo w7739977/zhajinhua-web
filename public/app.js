@@ -578,14 +578,27 @@
 
   App.invite = function () {
     var url = window.location.origin + '/#/room/' + state.roomId;
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(url).then(function () {
-        showToast('链接已复制');
-      });
-    } else {
-      showToast('房间号：' + state.roomId);
-    }
+    copyText(url).then(function (ok) {
+      if (ok) showToast('邀请链接已复制');
+      else showToast('复制失败，房间号：' + state.roomId);
+    });
   };
+
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; });
+    }
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+    return Promise.resolve(ok);
+  }
 
   App.deal = function () {
     if (!state.canDeal) return;
