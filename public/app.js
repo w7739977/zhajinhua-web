@@ -396,7 +396,6 @@
     }
 
     var isDealer = selfOpenId === dealerOpenId;
-    var showMockTools = !!(state.isOwner || (room.ownerOpenId && room.ownerOpenId === selfOpenId));
 
     var otherPlayers = ordered.filter(function (p) { return !p.isSelf; }).map(function (p) {
       return Object.assign({}, p, {
@@ -415,7 +414,6 @@
     var canBet = status === 'betting' && !isDealer && !hasBet;
     var canOpen = status === 'opening' && isDealer;
     var selectedCount = Object.values(state.selectedPlayers || {}).filter(Boolean).length;
-    var mockCount = players.filter(function (p) { return p.isMock; }).length;
 
     state.room = room;
     state.selfPlayer = self;
@@ -442,7 +440,7 @@
       return;
     }
 
-    renderRoom(showMockTools, mockCount);
+    renderRoom();
   }
 
   function renderPlayerItem(p, status, dealerOpenId, isSelectable) {
@@ -458,7 +456,6 @@
     if (p.isDealer) html += '<span class="crown-badge">👑</span>';
     html += '</div>';
     html += '<span class="nickname">' + escHtml(p.nickName || '玩家') + '</span>';
-    if (p.isMock) html += '<span class="mock-tag">模拟</span>';
     if (p.hasDealt) {
       html += '<span class="deal-tag">已发牌</span>';
     } else if (status === 'waiting' || status === 'dealing') {
@@ -474,7 +471,7 @@
     return html;
   }
 
-  function renderRoom(showMockTools, mockCount) {
+  function renderRoom() {
     var self = state.selfPlayer;
     var status = state.status;
     var isDealer = state.isDealer;
@@ -491,18 +488,6 @@
     html += '<span class="room-id">房间号：' + escHtml(state.roomId) + '</span>';
     html += '<button class="invite-btn" onclick="App.invite()">复制邀请链接</button>';
     html += '</div>';
-
-    // Mock panel
-    if (showMockTools) {
-      html += '<div class="mock-panel">';
-      html += '<div class="mock-panel-header"><span class="mock-panel-title">测试面板</span><span class="mock-panel-meta">模拟玩家：' + mockCount + '</span></div>';
-      html += '<div class="mock-actions">';
-      html += '<button class="mock-btn" onclick="App.mockAction(\'setupMocks\')">添加模拟玩家</button>';
-      html += '<button class="mock-btn" onclick="App.mockAction(\'mockDealOthers\')">模拟发牌</button>';
-      html += '<button class="mock-btn" onclick="App.mockAction(\'mockBetOthers\')">模拟下注</button>';
-      html += '<button class="mock-btn danger" onclick="App.mockAction(\'clearMocks\')">清空模拟</button>';
-      html += '</div></div>';
-    }
 
     // Table stage
     if (state.otherPlayers.length > 0 || publicCardText) {
@@ -636,9 +621,7 @@
     state.rightPlayers = state.otherPlayers.slice(0, splitIndex).reverse();
     state.leftPlayers = state.otherPlayers.slice(splitIndex);
 
-    var mockCount = (state.room && state.room.players || []).filter(function (p) { return p.isMock; }).length;
-    var showMockTools = state.isOwner || (state.room && state.room.ownerOpenId === state.playerId);
-    renderRoom(showMockTools, mockCount);
+    renderRoom();
   };
 
   App.openSelected = function () {
@@ -664,22 +647,6 @@
       if (!result.ok) showToast(result.message || '开牌失败');
     }).catch(function () { hideLoading(); showToast('开牌失败'); });
   }
-
-  App.mockAction = function (action) {
-    var titles = {
-      setupMocks: '添加模拟玩家...',
-      mockDealOthers: '模拟发牌中...',
-      mockBetOthers: '模拟下注中...',
-      clearMocks: '清理模拟玩家...'
-    };
-    showLoading(titles[action] || '操作中...');
-    api('mockRoomAction', { roomId: state.roomId, action: action }).then(function (result) {
-      hideLoading();
-      if (!result.ok) { showToast(result.message || '操作失败'); return; }
-      if (result.room) updateRoomView(result.room);
-      else fetchRoom();
-    }).catch(function () { hideLoading(); showToast('操作失败'); });
-  };
 
   // ============================================================
   // Result Page
