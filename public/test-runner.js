@@ -19,6 +19,11 @@
     return fetch(path).then(function (r) { return r.status; });
   }
 
+  function brief(obj) {
+    try { var s = JSON.stringify(obj); return s.length > 200 ? s.slice(0, 200) + '...' : s; }
+    catch (e) { return String(obj); }
+  }
+
   function updateUI() {
     var el = document.getElementById('test-results');
     if (!el) return;
@@ -44,7 +49,7 @@
         html += '<span class="test-icon">' + icon + '</span>';
         html += '<span class="test-name">' + esc(t.name) + '</span>';
         if (t.ms != null) html += '<span class="test-time">' + t.ms + 'ms</span>';
-        if (t.detail && t.status === 'fail') html += '<span class="test-detail">' + esc(t.detail) + '</span>';
+        if (t.detail && t.status === 'fail') html += '<div class="test-detail">' + esc(t.detail) + '</div>';
         html += '</div>';
       }
       html += '</div>';
@@ -78,13 +83,13 @@
     return t;
   }
 
-  async function check(t, condition, detail) {
+  function check(t, condition, detail) {
     if (condition) {
       t.status = 'pass';
       passed++;
     } else {
       t.status = 'fail';
-      t.detail = detail || '';
+      t.detail = detail || 'condition=false';
       failed++;
     }
     updateUI();
@@ -109,7 +114,6 @@
     var G10 = '10. 静态资源';
     var G11 = '11. Socket.IO 连通';
 
-    // Pre-register all tests
     var t1_1 = register(G1, '创建房间');
     var t1_2 = register(G1, '玩家B加入');
     var t1_3 = register(G1, '玩家C加入');
@@ -182,178 +186,214 @@
       });
     }
 
+    function getNonDealer(ids, dl) {
+      return ids.filter(function (x) { return x !== dl; });
+    }
+
+    async function betAll(ids, dl, rid, amt) {
+      var nd = getNonDealer(ids, dl);
+      for (var i = 0; i < nd.length; i++) {
+        await post('bet', { playerId: nd[i], roomId: rid, bet: amt || 1 });
+      }
+    }
+
+    async function finishRound(dl, rid, players) {
+      await betAll(players, dl, rid, 1);
+      var ro = await post('open', { playerId: dl, roomId: rid, mode: 'openAllNoPass', selectedOpenIds: [] });
+      if (!ro.ok) return dl;
+      var nd = ro.roundResult.nextDealerOpenId;
+      var rr = await post('resetRound', { playerId: nd, roomId: rid });
+      return rr.ok ? rr.dealerOpenId : nd;
+    }
+
     try {
-      // === G1: 基础流程 ===
+      // =============== G1: 基础流程 ===============
       var r1 = await ms(t1_1, function () { return post('createRoom', { playerId: A, nickName: 'A' }); });
       roomId = r1.roomId;
-      await check(t1_1, r1.ok && roomId, 'roomId=' + roomId);
+      check(t1_1, r1.ok && roomId, 'ok=' + r1.ok + ' roomId=' + roomId + ' resp=' + brief(r1));
       dealer = A;
 
-      await ms(t1_2, function () { return post('joinRoom', { playerId: B, roomId: roomId, nickName: 'B' }); });
-      await check(t1_2, true);
+      var r1_2 = await ms(t1_2, function () { return post('joinRoom', { playerId: B, roomId: roomId, nickName: 'B' }); });
+      check(t1_2, r1_2.ok, 'resp=' + brief(r1_2));
 
-      await ms(t1_3, function () { return post('joinRoom', { playerId: C, roomId: roomId, nickName: 'C' }); });
-      await check(t1_3, true);
+      var r1_3 = await ms(t1_3, function () { return post('joinRoom', { playerId: C, roomId: roomId, nickName: 'C' }); });
+      check(t1_3, r1_3.ok, 'resp=' + brief(r1_3));
 
       var r4 = await ms(t1_4, function () { return post('deal', { playerId: dealer, roomId: roomId }); });
-      await check(t1_4, r4.ok, r4.code);
-      await check(t1_5, r4.room && r4.room.players.every(function (p) { return p.hasDealt; }) && !!r4.room.publicCard && r4.room.status === 'betting');
+      check(t1_4, r4.ok, 'ok=' + r4.ok + ' code=' + r4.code + ' msg=' + r4.message + ' resp=' + brief(r4));
+
+      if (r4.ok && r4.room) {
+        var allDealt = r4.room.players.every(function (p) { return p.hasDealt; });
+        var hasPub = !!r4.room.publicCard;
+        var isBetting = r4.room.status === 'betting';
+        check(t1_5, allDealt && hasPub && isBetting,
+          'allDealt=' + allDealt + ' publicCard=' + r4.room.publicCard + ' status=' + r4.room.status +
+          ' players=' + brief(r4.room.players.map(function (p) { return { id: p.openId.slice(-6), dealt: p.hasDealt, card: !!p.card }; })));
+      } else {
+        check(t1_5, false, 'deal failed, no room data. deal resp=' + brief(r4));
+      }
 
       var rB = await ms(t1_6, function () { return post('bet', { playerId: B, roomId: roomId, bet: 2 }); });
-      await check(t1_6, rB.ok);
+      check(t1_6, rB.ok, 'ok=' + rB.ok + ' code=' + rB.code + ' msg=' + rB.message);
 
       var rC = await ms(t1_7, function () { return post('bet', { playerId: C, roomId: roomId, bet: 3 }); });
-      await check(t1_7, rC.ok && rC.room.status === 'opening', rC.room && rC.room.status);
+      check(t1_7, rC.ok && rC.room && rC.room.status === 'opening',
+        'ok=' + rC.ok + ' status=' + (rC.room && rC.room.status) + ' code=' + rC.code);
 
       var rOpen = await ms(t1_8, function () { return post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] }); });
-      await check(t1_8, rOpen.ok);
-      dealer = rOpen.roundResult.nextDealerOpenId;
+      check(t1_8, rOpen.ok, 'ok=' + rOpen.ok + ' code=' + rOpen.code + ' msg=' + rOpen.message);
+      if (rOpen.ok) dealer = rOpen.roundResult.nextDealerOpenId;
 
       var rReset = await ms(t1_9, function () { return post('resetRound', { playerId: dealer, roomId: roomId }); });
-      await check(t1_9, rReset.ok);
-      dealer = rReset.dealerOpenId;
+      check(t1_9, rReset.ok, 'ok=' + rReset.ok + ' code=' + rReset.code + ' msg=' + rReset.message);
+      if (rReset.ok) dealer = rReset.dealerOpenId;
 
-      // === G2: 庄家驱动 ===
+      // =============== G2: 庄家驱动 ===============
       var rSolo = await post('createRoom', { playerId: A, nickName: 'A' });
       var soloRoomId = rSolo.roomId;
       var r2_1 = await ms(t2_1, function () { return post('deal', { playerId: A, roomId: soloRoomId }); });
-      await check(t2_1, !r2_1.ok && r2_1.code === 'NOT_ENOUGH_PLAYERS', r2_1.code);
+      check(t2_1, !r2_1.ok && r2_1.code === 'NOT_ENOUGH_PLAYERS',
+        'ok=' + r2_1.ok + ' code=' + r2_1.code + ' (expect NOT_ENOUGH_PLAYERS)');
 
-      var nonDealer = [A, B, C].filter(function (x) { return x !== dealer; });
-      var r2_2 = await ms(t2_2, function () { return post('deal', { playerId: nonDealer[0], roomId: roomId }); });
-      await check(t2_2, !r2_2.ok && r2_2.code === 'NOT_DEALER', r2_2.code);
+      var nd0 = getNonDealer([A, B, C], dealer);
+      var r2_2 = await ms(t2_2, function () { return post('deal', { playerId: nd0[0], roomId: roomId }); });
+      check(t2_2, !r2_2.ok && r2_2.code === 'NOT_DEALER',
+        'ok=' + r2_2.ok + ' code=' + r2_2.code + ' (expect NOT_DEALER)');
 
       await post('deal', { playerId: dealer, roomId: roomId });
       var r2_3 = await ms(t2_3, function () { return post('bet', { playerId: dealer, roomId: roomId, bet: 1 }); });
-      await check(t2_3, !r2_3.ok && r2_3.code === 'DEALER_NO_BET', r2_3.code);
+      check(t2_3, !r2_3.ok && r2_3.code === 'DEALER_NO_BET',
+        'ok=' + r2_3.ok + ' code=' + r2_3.code + ' (expect DEALER_NO_BET)');
 
-      nonDealer = [A, B, C].filter(function (x) { return x !== dealer; });
-      for (var i = 0; i < nonDealer.length; i++) await post('bet', { playerId: nonDealer[i], roomId: roomId, bet: 1 });
-      var ro = await post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
-      dealer = ro.roundResult.nextDealerOpenId;
-      var rr = await post('resetRound', { playerId: dealer, roomId: roomId });
-      dealer = rr.dealerOpenId;
+      dealer = await finishRound(dealer, roomId, [A, B, C]);
 
-      // === G3: 选择开牌+保留手牌 ===
+      // =============== G3: 选择开牌+保留手牌 ===============
       await post('deal', { playerId: dealer, roomId: roomId });
-      nonDealer = [A, B, C].filter(function (x) { return x !== dealer; });
-      for (var i2 = 0; i2 < nonDealer.length; i2++) await post('bet', { playerId: nonDealer[i2], roomId: roomId, bet: 1 });
-
-      var targetB = nonDealer[0];
-      var targetC = nonDealer[1];
+      var nd3 = getNonDealer([A, B, C], dealer);
+      await betAll([A, B, C], dealer, roomId, 1);
+      var targetB = nd3[0], targetC = nd3[1];
 
       var r3_1 = await ms(t3_1, function () { return post('open', { playerId: dealer, roomId: roomId, mode: 'selectPlayers', selectedOpenIds: [targetB] }); });
-      await check(t3_1, r3_1.ok && r3_1.roundResult.openedPlayerIds.indexOf(targetB) >= 0 && r3_1.roundResult.openedPlayerIds.indexOf(targetC) < 0);
-      dealer = r3_1.roundResult.nextDealerOpenId;
+      check(t3_1, r3_1.ok && r3_1.roundResult.openedPlayerIds.indexOf(targetB) >= 0 && r3_1.roundResult.openedPlayerIds.indexOf(targetC) < 0,
+        'ok=' + r3_1.ok + ' opened=' + brief(r3_1.roundResult && r3_1.roundResult.openedPlayerIds));
+      if (r3_1.ok) dealer = r3_1.roundResult.nextDealerOpenId;
 
       var r3_r = await ms(t3_2, function () { return post('resetRound', { playerId: dealer, roomId: roomId }); });
-      dealer = r3_r.dealerOpenId;
-      var pCr = r3_r.room.players.find(function (p) { return p.openId === targetC; });
-      var pBr = r3_r.room.players.find(function (p) { return p.openId === targetB; });
-      await check(t3_2, pCr && pCr.card !== null && pCr.retainedCard === true);
-      await check(t3_3, pBr && pBr.card === null);
+      if (r3_r.ok) dealer = r3_r.dealerOpenId;
+      var pCr = r3_r.room && r3_r.room.players.find(function (p) { return p.openId === targetC; });
+      var pBr = r3_r.room && r3_r.room.players.find(function (p) { return p.openId === targetB; });
+      check(t3_2, pCr && pCr.card !== null && pCr.retainedCard === true,
+        'C: card=' + (pCr && pCr.card) + ' retained=' + (pCr && pCr.retainedCard));
+      check(t3_3, pBr && pBr.card === null,
+        'B: card=' + (pBr && pBr.card));
 
       var r3_d = await ms(t3_4, function () { return post('deal', { playerId: dealer, roomId: roomId }); });
-      await check(t3_4, r3_d.ok);
-      var pC2 = r3_d.room.players.find(function (p) { return p.openId === targetC; });
-      await check(t3_5, pC2 && pC2.card !== null && pC2.hasDealt);
-      await check(t3_6, !!r3_d.room.publicCard);
+      check(t3_4, r3_d.ok, 'ok=' + r3_d.ok + ' code=' + r3_d.code);
+      if (r3_d.ok && r3_d.room) {
+        var pC2 = r3_d.room.players.find(function (p) { return p.openId === targetC; });
+        check(t3_5, pC2 && pC2.card !== null && pC2.hasDealt, 'C: card=' + (pC2 && pC2.card) + ' dealt=' + (pC2 && pC2.hasDealt));
+        check(t3_6, !!r3_d.room.publicCard, 'publicCard=' + r3_d.room.publicCard);
+      } else {
+        check(t3_5, false, 'deal failed: ' + brief(r3_d));
+        check(t3_6, false, 'deal failed: ' + brief(r3_d));
+      }
 
-      nonDealer = [A, B, C].filter(function (x) { return x !== dealer; });
-      for (var i3 = 0; i3 < nonDealer.length; i3++) await post('bet', { playerId: nonDealer[i3], roomId: roomId, bet: 1 });
-      var ro2 = await post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
-      dealer = ro2.roundResult.nextDealerOpenId;
-      var rr2 = await post('resetRound', { playerId: dealer, roomId: roomId });
-      dealer = rr2.dealerOpenId;
+      dealer = await finishRound(dealer, roomId, [A, B, C]);
 
-      // === G4: 中途加入观战 ===
+      // =============== G4: 中途加入观战 ===============
       await post('deal', { playerId: dealer, roomId: roomId });
 
       var r4_1r = await ms(t4_1, function () { return post('joinRoom', { playerId: D, roomId: roomId, nickName: 'D' }); });
-      await check(t4_1, r4_1r.ok && r4_1r.spectating === true);
-      var pD = r4_1r.room.players.find(function (p) { return p.openId === D; });
-      await check(t4_2, pD && pD.spectating === true);
+      check(t4_1, r4_1r.ok && r4_1r.spectating === true,
+        'ok=' + r4_1r.ok + ' spectating=' + r4_1r.spectating);
+      var pD = r4_1r.room && r4_1r.room.players.find(function (p) { return p.openId === D; });
+      check(t4_2, pD && pD.spectating === true,
+        'D spectating=' + (pD && pD.spectating));
 
       var r4_3r = await ms(t4_3, function () { return post('bet', { playerId: D, roomId: roomId, bet: 1 }); });
-      await check(t4_3, !r4_3r.ok && r4_3r.code === 'SPECTATING', r4_3r.code);
+      check(t4_3, !r4_3r.ok && r4_3r.code === 'SPECTATING',
+        'ok=' + r4_3r.ok + ' code=' + r4_3r.code + ' (expect SPECTATING)');
 
-      nonDealer = [A, B, C].filter(function (x) { return x !== dealer; });
-      for (var i4 = 0; i4 < nonDealer.length; i4++) await post('bet', { playerId: nonDealer[i4], roomId: roomId, bet: 1 });
+      var nd4a = getNonDealer([A, B, C], dealer);
+      for (var i4 = 0; i4 < nd4a.length; i4++) await post('bet', { playerId: nd4a[i4], roomId: roomId, bet: 1 });
       var ro3 = await post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
-      dealer = ro3.roundResult.nextDealerOpenId;
+      if (ro3.ok) dealer = ro3.roundResult.nextDealerOpenId;
       var rr3 = await ms(t4_4, function () { return post('resetRound', { playerId: dealer, roomId: roomId }); });
-      dealer = rr3.dealerOpenId;
-      var pD2 = rr3.room.players.find(function (p) { return p.openId === D; });
-      await check(t4_4, pD2 && pD2.spectating === false);
+      if (rr3.ok) dealer = rr3.dealerOpenId;
+      var pD2 = rr3.room && rr3.room.players.find(function (p) { return p.openId === D; });
+      check(t4_4, pD2 && pD2.spectating === false,
+        'D spectating=' + (pD2 && pD2.spectating));
 
-      // === G5: 权限控制 ===
+      // =============== G5: 权限控制 ===============
       await post('deal', { playerId: dealer, roomId: roomId });
-      nonDealer = [A, B, C, D].filter(function (x) { return x !== dealer; });
-      for (var i5 = 0; i5 < nonDealer.length; i5++) await post('bet', { playerId: nonDealer[i5], roomId: roomId, bet: 1 });
+      var nd5 = getNonDealer([A, B, C, D], dealer);
+      for (var i5 = 0; i5 < nd5.length; i5++) await post('bet', { playerId: nd5[i5], roomId: roomId, bet: 1 });
       var ro4 = await post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
-      var nd4 = ro4.roundResult.nextDealerOpenId;
+      var nd5d = ro4.ok ? ro4.roundResult.nextDealerOpenId : dealer;
 
-      var nonAuth = [A, B, C, D].filter(function (x) { return x !== nd4; });
+      var nonAuth = [A, B, C, D].filter(function (x) { return x !== nd5d; });
       var r5_1r = await ms(t5_1, function () { return post('resetRound', { playerId: nonAuth[0], roomId: roomId }); });
-      await check(t5_1, !r5_1r.ok, r5_1r.code);
+      check(t5_1, !r5_1r.ok, 'ok=' + r5_1r.ok + ' code=' + r5_1r.code + ' (expect NOT_AUTHORIZED)');
 
-      var r5_2r = await ms(t5_2, function () { return post('resetRound', { playerId: nd4, roomId: roomId }); });
-      await check(t5_2, r5_2r.ok);
-      dealer = r5_2r.dealerOpenId;
+      var r5_2r = await ms(t5_2, function () { return post('resetRound', { playerId: nd5d, roomId: roomId }); });
+      check(t5_2, r5_2r.ok, 'ok=' + r5_2r.ok + ' code=' + r5_2r.code);
+      if (r5_2r.ok) dealer = r5_2r.dealerOpenId;
 
-      // === G6: 踢人 ===
+      // =============== G6: 踢人 ===============
       var nonOwner = [B, C, D].filter(function (x) { return x !== dealer; })[0];
       var r6_1r = await ms(t6_1, function () { return post('kickPlayer', { playerId: nonOwner, roomId: roomId, targetPlayerId: D }); });
-      await check(t6_1, !r6_1r.ok, r6_1r.code);
+      check(t6_1, !r6_1r.ok, 'ok=' + r6_1r.ok + ' code=' + r6_1r.code + ' (expect NOT_AUTHORIZED)');
 
-      var kickTarget = D;
-      var kicker = dealer;
-      var r6_2r = await ms(t6_2, function () { return post('kickPlayer', { playerId: kicker, roomId: roomId, targetPlayerId: kickTarget }); });
-      await check(t6_2, r6_2r.ok && !r6_2r.room.players.find(function (p) { return p.openId === kickTarget; }));
+      var r6_2r = await ms(t6_2, function () { return post('kickPlayer', { playerId: dealer, roomId: roomId, targetPlayerId: D }); });
+      check(t6_2, r6_2r.ok && !r6_2r.room.players.find(function (p) { return p.openId === D; }),
+        'ok=' + r6_2r.ok + ' D still in=' + !!(r6_2r.room && r6_2r.room.players.find(function (p) { return p.openId === D; })));
 
-      var r6_3r = await ms(t6_3, function () { return post('kickPlayer', { playerId: kicker, roomId: roomId, targetPlayerId: kicker }); });
-      await check(t6_3, !r6_3r.ok && r6_3r.code === 'CANNOT_KICK_SELF', r6_3r.code);
+      var r6_3r = await ms(t6_3, function () { return post('kickPlayer', { playerId: dealer, roomId: roomId, targetPlayerId: dealer }); });
+      check(t6_3, !r6_3r.ok && r6_3r.code === 'CANNOT_KICK_SELF',
+        'ok=' + r6_3r.ok + ' code=' + r6_3r.code);
 
-      // === G7: 全开 ===
+      // =============== G7: 全开 ===============
       await post('deal', { playerId: dealer, roomId: roomId });
-      nonDealer = [A, B, C].filter(function (x) { return x !== dealer; });
-      for (var i7 = 0; i7 < nonDealer.length; i7++) await post('bet', { playerId: nonDealer[i7], roomId: roomId, bet: 2 });
+      var nd7 = getNonDealer([A, B, C], dealer);
+      for (var i7 = 0; i7 < nd7.length; i7++) await post('bet', { playerId: nd7[i7], roomId: roomId, bet: 2 });
       var r7_1r = await ms(t7_1, function () { return post('open', { playerId: dealer, roomId: roomId, mode: 'openAll', selectedOpenIds: [] }); });
-      await check(t7_1, r7_1r.ok);
-      await check(t7_2, r7_1r.roundResult && r7_1r.roundResult.openedPlayerIds.length === nonDealer.length);
-      dealer = r7_1r.roundResult.nextDealerOpenId;
+      check(t7_1, r7_1r.ok, 'ok=' + r7_1r.ok + ' code=' + r7_1r.code);
+      check(t7_2, r7_1r.ok && r7_1r.roundResult && r7_1r.roundResult.openedPlayerIds.length === nd7.length,
+        'opened=' + (r7_1r.roundResult && r7_1r.roundResult.openedPlayerIds.length) + ' expected=' + nd7.length);
+      if (r7_1r.ok) dealer = r7_1r.roundResult.nextDealerOpenId;
       await post('resetRound', { playerId: dealer, roomId: roomId });
 
-      // === G8: 边界防护 ===
+      // =============== G8: 边界防护 ===============
       var r8_1r = await ms(t8_1, function () { return post('deal', { playerId: A, roomId: '' }); });
-      await check(t8_1, !r8_1r.ok);
+      check(t8_1, !r8_1r.ok, 'ok=' + r8_1r.ok + ' code=' + r8_1r.code);
 
       var r8_2r = await ms(t8_2, function () { return post('deal', { playerId: A, roomId: '999999' }); });
-      await check(t8_2, !r8_2r.ok && r8_2r.code === 'ROOM_NOT_FOUND', r8_2r.code);
+      check(t8_2, !r8_2r.ok && r8_2r.code === 'ROOM_NOT_FOUND', 'code=' + r8_2r.code);
 
       var r8_3r = await ms(t8_3, function () { return post('deal', { roomId: roomId }); });
-      await check(t8_3, !r8_3r.ok && r8_3r.code === 'NO_PLAYER_ID', r8_3r.code);
+      check(t8_3, !r8_3r.ok && r8_3r.code === 'NO_PLAYER_ID', 'code=' + r8_3r.code);
 
       var rGetRoom = await post('getRoom', { playerId: dealer, roomId: roomId });
-      dealer = rGetRoom.room.dealerOpenId;
+      if (rGetRoom.ok) dealer = rGetRoom.room.dealerOpenId;
       await post('deal', { playerId: dealer, roomId: roomId });
       var r8_4r = await ms(t8_4, function () { return post('deal', { playerId: dealer, roomId: roomId }); });
-      await check(t8_4, !r8_4r.ok && r8_4r.code === 'WRONG_STATUS', r8_4r.code);
+      check(t8_4, !r8_4r.ok && r8_4r.code === 'WRONG_STATUS', 'code=' + r8_4r.code);
 
-      nonDealer = [A, B, C].filter(function (x) { return x !== dealer; });
-      await post('bet', { playerId: nonDealer[0], roomId: roomId, bet: 1 });
-      var r8_5r = await ms(t8_5, function () { return post('bet', { playerId: nonDealer[0], roomId: roomId, bet: 2 }); });
-      await check(t8_5, !r8_5r.ok && r8_5r.code === 'ALREADY_BET', r8_5r.code);
+      var nd8 = getNonDealer([A, B, C], dealer);
+      await post('bet', { playerId: nd8[0], roomId: roomId, bet: 1 });
+      var r8_5r = await ms(t8_5, function () { return post('bet', { playerId: nd8[0], roomId: roomId, bet: 2 }); });
+      check(t8_5, !r8_5r.ok && r8_5r.code === 'ALREADY_BET', 'code=' + r8_5r.code);
 
-      var r8_6r = await ms(t8_6, function () { return post('open', { playerId: nonDealer[0], roomId: roomId, mode: 'openAll' }); });
-      await check(t8_6, !r8_6r.ok && r8_6r.code === 'NOT_DEALER', r8_6r.code);
+      var r8_6r = await ms(t8_6, function () { return post('open', { playerId: nd8[0], roomId: roomId, mode: 'openAll' }); });
+      check(t8_6, !r8_6r.ok && r8_6r.code === 'NOT_DEALER', 'code=' + r8_6r.code);
 
-      for (var i8 = 1; i8 < nonDealer.length; i8++) await post('bet', { playerId: nonDealer[i8], roomId: roomId, bet: 1 });
-      var ro8 = await post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
-      dealer = ro8.roundResult.nextDealerOpenId;
+      for (var i8 = 1; i8 < nd8.length; i8++) await post('bet', { playerId: nd8[i8], roomId: roomId, bet: 1 });
+      await post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
+      var rGetRoom2 = await post('getRoom', { playerId: dealer, roomId: roomId });
+      if (rGetRoom2.ok) dealer = rGetRoom2.room.dealerOpenId;
       await post('resetRound', { playerId: dealer, roomId: roomId });
 
-      // === G9: 牌组管理 ===
+      // =============== G9: 牌组管理 ===============
       var X1 = '_test_X1_' + Date.now();
       var X2 = '_test_X2_' + Date.now();
       var rx = await post('createRoom', { playerId: X1, nickName: 'X1' });
@@ -367,42 +407,41 @@
         var nd9 = d2 === X1 ? X2 : X1;
         await post('bet', { playerId: nd9, roomId: rid2, bet: 1 });
         var or9 = await post('open', { playerId: d2, roomId: rid2, mode: 'openAllNoPass', selectedOpenIds: [] });
-        d2 = or9.roundResult.nextDealerOpenId;
+        d2 = or9.roundResult ? or9.roundResult.nextDealerOpenId : d2;
         var rr9 = await post('resetRound', { playerId: d2, roomId: rid2 });
-        d2 = rr9.dealerOpenId;
+        d2 = rr9.ok ? rr9.dealerOpenId : d2;
       }
       var rDeal9 = await post('deal', { playerId: d2, roomId: rid2 });
       t9_1.ms = Date.now() - s9;
-      await check(t9_1, rDeal9.ok);
+      check(t9_1, rDeal9.ok, 'ok=' + rDeal9.ok + ' code=' + rDeal9.code);
 
-      // === G10: 静态资源 ===
+      // =============== G10: 静态资源 ===============
       var s10_1 = await ms(t10_1, function () { return httpGet('/'); });
-      await check(t10_1, s10_1 === 200, 'status=' + s10_1);
+      check(t10_1, s10_1 === 200, 'status=' + s10_1);
 
       var s10_2 = await ms(t10_2, function () { return httpGet('/app.js'); });
-      await check(t10_2, s10_2 === 200, 'status=' + s10_2);
+      check(t10_2, s10_2 === 200, 'status=' + s10_2);
 
       var s10_3 = await ms(t10_3, function () { return httpGet('/style.css'); });
-      await check(t10_3, s10_3 === 200, 'status=' + s10_3);
+      check(t10_3, s10_3 === 200, 'status=' + s10_3);
 
       var s10_4 = await ms(t10_4, function () { return httpGet('/qrcode.min.js'); });
-      await check(t10_4, s10_4 === 200, 'status=' + s10_4);
+      check(t10_4, s10_4 === 200, 'status=' + s10_4);
 
       var s10_5 = await ms(t10_5, function () { return httpGet('/test-runner.js'); });
-      await check(t10_5, s10_5 === 200, 'status=' + s10_5);
+      check(t10_5, s10_5 === 200, 'status=' + s10_5);
 
-      // === G11: Socket.IO ===
+      // =============== G11: Socket.IO ===============
       var s11 = await ms(t11_1, function () { return httpGet('/socket.io/socket.io.js'); });
-      await check(t11_1, s11 === 200, 'status=' + s11);
+      check(t11_1, s11 === 200, 'status=' + s11);
 
     } catch (err) {
-      var errTest = register('ERROR', '测试运行异常: ' + err.message);
+      var errTest = register('ERROR', '测试运行异常');
       errTest.status = 'fail';
-      errTest.detail = err.stack || err.message;
+      errTest.detail = (err.message || '') + ' | ' + (err.stack || '').split('\n').slice(0, 3).join(' ');
       failed++;
     }
 
-    // Cleanup
     try {
       await post('_cleanTestRooms', { key: testKey });
     } catch (e) { /* ignore */ }
