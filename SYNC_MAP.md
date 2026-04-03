@@ -106,6 +106,12 @@
 | 触发更新 | 云函数写入数据库后 watch 自动触发 | API 路由调用 `broadcastRoom(roomId)` |
 | 断线重连 | `onError` → 3秒后 `_createWatcher()` | Socket.IO 自动重连 + `reconnect` 事件 |
 | 切后台恢复 | 小程序 `onShow()` 重新 `_createWatcher()` | `visibilitychange` → 重新 `joinRoom` + `fetchRoom()` |
+| 在线状态追踪 | — | Socket `disconnect` → 60s 宽限 → 离线自动处理 |
+| 离线托管(下注) | — | 自动下注 1，标记 `autoBet` |
+| 离线托管(庄家) | — | 自动全开不过庄 / 自动 resetRound |
+| 中途加入观战 | — | `joinRoom` → `spectating: true`，下轮自动参与 |
+| 选择开牌保留手牌 | — | `resetRound` 保留未选中玩家 `card`，标记 `retainedCard` |
+| 庄家下一局广播 | — | `resetRound` 发送 `roundReset` 事件，全员自动返回房间 |
 | 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)` |
 | 离开房间频道 | `watcher.close()` | `socket.emit('leaveRoom', roomId)` |
 
@@ -130,6 +136,8 @@
 | `getApp().globalData` | `state` 对象 | `app.js` 顶部 |
 | `this.setData({...})` | 修改 `state` + 调用 `renderXxx()` | 各 render 函数 |
 | `button open-type="share"` | 二维码弹窗 + 复制链接 | `app.js` → `App.invite()` / `App.copyInviteLink()` |
+| — | 庄家踢人 | `app.js` → `App.kickPlayer()` → `POST /api/kickPlayer` |
+| — | 庄家下一局 | `app.js` → `App.nextRound()` → `POST /api/resetRound` + `roundReset` 事件 |
 
 ---
 
@@ -144,7 +152,8 @@ publicCard, roundResult, players[], createdAt, updatedAt
 
 Player 对象：
 ```
-openId, nickName, avatarUrl, hasDealt, card, bet, score, [isMock]
+openId, nickName, avatarUrl, hasDealt, card, bet, score,
+spectating, offline, autoBet, retainedCard, [isMock]
 ```
 
 RoundResult 对象：
@@ -168,9 +177,9 @@ handTypeName, bet, result, playerDrinks, dealerDrinks
 ## 7. 状态流转（两版完全一致）
 
 ```
-waiting → dealing → betting → opening → opened
-   ↑                                        |
-   +────────── resetRound ←─────────────────+
+waiting ──庄家发牌──→ betting ──全员下注──→ opening ──庄家开牌──→ opened
+   ↑                                                              |
+   +──────────── 庄家点"下一局" (resetRound) ←───────────────────+
 ```
 
 > **改动规则**：新增状态或修改流转条件时，两边同步。
@@ -207,3 +216,5 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] 状态流转变动 → 同步所有涉及 `status` 判断的云函数 & API 路由 & 前端条件渲染
 - [ ] UI/样式变动 → 同步 WXSS & CSS（注意 rpx→px 换算）
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
+
+> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。

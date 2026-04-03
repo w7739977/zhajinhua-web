@@ -20,15 +20,15 @@
   }
 
   function renderAvatar(name, size, extraClass) {
-    const initial = (name || '?')[0];
-    const bg = hashColor(name || '?');
+    var initial = (name || '?')[0];
+    var bg = hashColor(name || '?');
     return '<div class="avatar ' + (extraClass || '') + '" style="background:' + bg +
       ';width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * 0.45) + 'px">' +
       escHtml(initial) + '</div>';
   }
 
   function getCardColorClass(card) {
-    const text = typeof card === 'string' ? card : (card && card.text);
+    var text = typeof card === 'string' ? card : (card && card.text);
     if (!text) return '';
     return (text.startsWith('♥') || text.startsWith('♦')) ? 'poker-card-text-red' : '';
   }
@@ -74,7 +74,6 @@
     userInfo: JSON.parse(localStorage.getItem('userInfo') || 'null'),
     currentPage: '',
 
-    // Room page
     roomId: '',
     isOwner: false,
     room: null,
@@ -86,7 +85,7 @@
     dealerOpenId: '',
     isDealer: false,
     hasDealt: false,
-    canDeal: true,
+    canDeal: false,
     hasBet: false,
     canBet: false,
     canOpen: false,
@@ -94,7 +93,6 @@
     selectedCount: 0,
     isNavigatingToResult: false,
 
-    // Result
     roundResult: null,
     roomPlayers: []
   };
@@ -129,9 +127,27 @@
       }
     });
 
+    socket.on('roundReset', function (data) {
+      if (data.roomId === state.roomId) {
+        if (state.currentPage === 'result') {
+          state.roundResult = null;
+          state.roomPlayers = [];
+          navigate('/room/' + state.roomId + (state.isOwner ? '/owner' : ''));
+        }
+      }
+    });
+
+    socket.on('playerKicked', function (data) {
+      if (data.roomId === state.roomId && data.kickedPlayerId === state.playerId) {
+        showToast('你已被移出房间');
+        leaveSocketRoom();
+        navigate('/');
+      }
+    });
+
     socket.on('reconnect', function () {
       if (currentSocketRoom) {
-        socket.emit('joinRoom', currentSocketRoom);
+        socket.emit('joinRoom', currentSocketRoom, state.playerId);
         if (state.currentPage === 'room') fetchRoom();
       }
     });
@@ -143,7 +159,7 @@
       socket.emit('leaveRoom', currentSocketRoom);
     }
     currentSocketRoom = roomId;
-    socket.emit('joinRoom', roomId);
+    socket.emit('joinRoom', roomId, state.playerId);
   }
 
   function leaveSocketRoom() {
@@ -307,6 +323,9 @@
         showToast(result.message || '加入失败');
         return;
       }
+      if (result.spectating) {
+        showToast('游戏进行中，你将观战本局', 3000);
+      }
       navigate('/room/' + roomId);
     }).catch(function () {
       hideLoading();
@@ -320,34 +339,7 @@
 
   function initRoomPage() {
     $app().innerHTML = '<div class="room-page"><div style="text-align:center;padding-top:40px;color:#9ca3af">加载中...</div></div>';
-
     joinSocketRoom(state.roomId);
-
-    var needReset = localStorage.getItem('roomNeedResetRound');
-    if (needReset) {
-      localStorage.removeItem('roomNeedResetRound');
-      state.selectedPlayers = {};
-      state.selectedCount = 0;
-      showLoading('新一局...');
-      api('resetRound', { roomId: state.roomId }).then(function (result) {
-        hideLoading();
-        if (!result.ok) showToast(result.message || '重置失败');
-        var passed = result.autoPassed || localStorage.getItem('roomPassedDealer');
-        localStorage.removeItem('roomPassedDealer');
-        if (passed) {
-          var tip = result.autoPassed ? '牌组不足，自动过庄' : '庄家全胜，自动过庄';
-          showToast(tip, 2500);
-        }
-        fetchRoom();
-      }).catch(function () {
-        hideLoading();
-        localStorage.removeItem('roomPassedDealer');
-        showToast('重置失败');
-        fetchRoom();
-      });
-      return;
-    }
-
     fetchRoom();
   }
 
@@ -375,7 +367,11 @@
         hasDealt: p.hasDealt === true,
         card: p.card || null,
         bet: p.bet != null ? p.bet : null,
-        score: p.score != null ? p.score : 0
+        score: p.score != null ? p.score : 0,
+        spectating: p.spectating || false,
+        offline: p.offline || false,
+        autoBet: p.autoBet || false,
+        retainedCard: p.retainedCard || false
       });
     });
 
@@ -396,6 +392,7 @@
     }
 
     var isDealer = selfOpenId === dealerOpenId;
+    var isSelfSpectating = !!(self && self.spectating);
 
     var otherPlayers = ordered.filter(function (p) { return !p.isSelf; }).map(function (p) {
       return Object.assign({}, p, {
@@ -409,9 +406,9 @@
     var leftPlayers = otherPlayers.slice(splitIndex);
 
     var hasDealt = !!(self && self.hasDealt === true);
-    var canDeal = !hasDealt && (status === 'waiting' || status === 'dealing');
+    var canDeal = isDealer && status === 'waiting' && !isSelfSpectating;
     var hasBet = !!(self && self.bet != null);
-    var canBet = status === 'betting' && !isDealer && !hasBet;
+    var canBet = status === 'betting' && !isDealer && !hasBet && !isSelfSpectating;
     var canOpen = status === 'opening' && isDealer;
     var selectedCount = Object.values(state.selectedPlayers || {}).filter(Boolean).length;
 
@@ -429,6 +426,7 @@
     state.canBet = canBet;
     state.canOpen = canOpen;
     state.selectedCount = selectedCount;
+    state.isSelfSpectating = isSelfSpectating;
 
     if (status !== 'opened') state.isNavigatingToResult = false;
 
@@ -443,30 +441,51 @@
     renderRoom();
   }
 
+  function playerStatusTags(p, status) {
+    var html = '';
+    if (p.offline) html += '<span class="player-tag tag-offline">离线</span>';
+    if (p.spectating) html += '<span class="player-tag tag-spectating">观战</span>';
+    if (p.retainedCard) html += '<span class="player-tag tag-retained">留牌</span>';
+    if (p.autoBet) html += '<span class="player-tag tag-auto">托管</span>';
+
+    if (!p.spectating && !p.offline) {
+      if (p.hasDealt && (status === 'dealing' || status === 'waiting' || status === 'betting')) {
+        html += '<span class="deal-tag">已发牌</span>';
+      } else if (!p.hasDealt && (status === 'waiting' || status === 'dealing')) {
+        html += '<span class="deal-tag pending">待发牌</span>';
+      }
+      if (p.bet != null && status !== 'waiting') {
+        html += '<span class="bet-tag">注码：' + p.bet + '</span>';
+      } else if (status === 'betting' && p.openId !== state.dealerOpenId) {
+        html += '<span class="bet-tag pending">待下注</span>';
+      }
+    }
+    if (p.score > 0) html += '<span class="score-tag">🍺' + p.score + '</span>';
+    return html;
+  }
+
   function renderPlayerItem(p, status, dealerOpenId, isSelectable) {
     var avatarClass = p.isDealer ? 'avatar-dealer' : (p.hasDealt ? 'avatar-dealt' : 'avatar-pending');
     var selectedClass = p.selected ? 'player-selected' : '';
-    var clickable = isSelectable ? ' selectable' : '';
-    var onclick = isSelectable ? ' onclick="App.togglePlayer(\'' + p.openId + '\')"' : '';
+    var clickable = isSelectable && !p.spectating ? ' selectable' : '';
+    var onclick = (isSelectable && !p.spectating) ? ' onclick="App.togglePlayer(\'' + p.openId + '\')"' : '';
+    var offlineClass = p.offline ? ' player-offline' : '';
 
-    var html = '<div class="other-player-item ' + selectedClass + clickable + '"' + onclick + '>';
+    var html = '<div class="other-player-item ' + selectedClass + clickable + offlineClass + '"' + onclick + '>';
     html += '<div class="seat-base"></div>';
     html += '<div class="avatar-wrap">';
     html += renderAvatar(p.nickName, 36, avatarClass);
     if (p.isDealer) html += '<span class="crown-badge">👑</span>';
+    if (p.offline) html += '<span class="offline-overlay"></span>';
     html += '</div>';
     html += '<span class="nickname">' + escHtml(p.nickName || '玩家') + '</span>';
-    if (p.hasDealt) {
-      html += '<span class="deal-tag">已发牌</span>';
-    } else if (status === 'waiting' || status === 'dealing') {
-      html += '<span class="deal-tag pending">未发牌</span>';
+    html += playerStatusTags(p, status);
+
+    var canKick = (state.isDealer || state.isOwner) && p.offline && !p.isSelf;
+    if (canKick) {
+      html += '<button class="kick-btn" onclick="event.stopPropagation();App.kickPlayer(\'' + p.openId + '\')">移出</button>';
     }
-    if (p.bet != null) {
-      html += '<span class="bet-tag">注码：' + p.bet + '</span>';
-    } else if (status === 'betting') {
-      html += '<span class="bet-tag pending">待下注</span>';
-    }
-    if (p.score > 0) html += '<span class="score-tag">🍺' + p.score + '</span>';
+
     html += '</div>';
     return html;
   }
@@ -475,6 +494,7 @@
     var self = state.selfPlayer;
     var status = state.status;
     var isDealer = state.isDealer;
+    var isSelfSpectating = state.isSelfSpectating;
     var publicCard = state.room ? state.room.publicCard : null;
     var publicCardText = publicCard || '';
     var publicCardColor = getCardColorClass(publicCard);
@@ -486,19 +506,21 @@
     // Header
     html += '<div class="room-header">';
     html += '<span class="room-id">房间号：' + escHtml(state.roomId) + '</span>';
-    html += '<button class="invite-btn" onclick="App.invite()">复制邀请链接</button>';
+    html += '<button class="invite-btn" onclick="App.invite()">邀请</button>';
     html += '</div>';
+
+    if (isSelfSpectating) {
+      html += '<div class="spectating-banner">你正在观战，下一局自动参与</div>';
+    }
 
     // Table stage
     if (state.otherPlayers.length > 0 || publicCardText) {
       html += '<div class="table-stage">';
 
-      // Left column
       html += '<div class="side-column left-column">';
       state.leftPlayers.forEach(function (p) { html += renderPlayerItem(p, status, state.dealerOpenId, isSelectable); });
       html += '</div>';
 
-      // Center
       html += '<div class="center-zone">';
       if (publicCard) {
         html += '<div class="center-card"><span class="center-card-label">公牌</span>';
@@ -509,7 +531,6 @@
       }
       html += '</div>';
 
-      // Right column
       html += '<div class="side-column right-column">';
       state.rightPlayers.forEach(function (p) { html += renderPlayerItem(p, status, state.dealerOpenId, isSelectable); });
       html += '</div>';
@@ -527,11 +548,12 @@
       html += '</div>';
       html += '<span class="self-nickname">' + escHtml(self.nickName || '我') + (isDealer ? ' (庄)' : '') + '</span>';
       if (self.score > 0) html += '<span class="score-tag score-tag-self">🍺累计：' + self.score + ' 杯</span>';
+      if (self.retainedCard) html += '<span class="player-tag tag-retained">留牌中</span>';
       if (self.card) {
         html += '<div class="self-card-row"><span class="self-hand-label">手牌：</span>';
         html += '<div class="poker-card"><span class="poker-card-text ' + selfCardColor + '">' + escHtml(typeof self.card === 'string' ? self.card : self.card.text) + '</span></div>';
         html += '</div>';
-      } else {
+      } else if (!isSelfSpectating) {
         html += '<span class="self-hand-card placeholder">手牌：未发牌</span>';
       }
       if (self.bet != null && !isDealer) {
@@ -541,11 +563,28 @@
     }
 
     // Bottom bar
-    if (status === 'waiting' || status === 'dealing') {
+    html += renderBottomBar(status, isDealer, self, isSelfSpectating);
+
+    html += '</div>';
+    $app().innerHTML = html;
+  }
+
+  function renderBottomBar(status, isDealer, self, isSelfSpectating) {
+    var html = '';
+
+    if (isSelfSpectating) {
+      html += '<div class="bottom-bar"><span class="status-text">观战中，等待下一局...</span></div>';
+      return html;
+    }
+
+    if (status === 'waiting') {
       html += '<div class="bottom-bar">';
-      html += '<button class="btn btn-primary btn-full' + (state.canDeal ? '' : ' disabled') + '" onclick="App.deal()">';
-      html += state.hasDealt ? '已发牌' : '发牌';
-      html += '</button></div>';
+      if (isDealer) {
+        html += '<button class="btn btn-primary btn-full" onclick="App.deal()">发牌</button>';
+      } else {
+        html += '<span class="status-text">等待庄家发牌...</span>';
+      }
+      html += '</div>';
     } else if (status === 'betting') {
       html += '<div class="bottom-bar">';
       if (isDealer) {
@@ -570,8 +609,7 @@
       html += '<div class="bottom-bar"><span class="status-text">等待庄家开牌...</span></div>';
     }
 
-    html += '</div>';
-    $app().innerHTML = html;
+    return html;
   }
 
   // Room actions
@@ -586,14 +624,11 @@
     modal.className = 'invite-modal';
 
     var header = '<div class="invite-header"><span class="invite-title">邀请好友</span><span class="invite-close" onclick="this.closest(\'.invite-overlay\').remove()">✕</span></div>';
-
     var qrWrap = '<div class="invite-qr" id="invite-qr-container"></div>';
-
     var info = '<div class="invite-info">' +
       '<div class="invite-room">房间号：<span class="invite-room-id">' + escHtml(state.roomId) + '</span></div>' +
       '<div class="invite-url">' + escHtml(url) + '</div>' +
       '</div>';
-
     var actions = '<div class="invite-actions">' +
       '<button class="btn btn-primary invite-copy-btn" onclick="App.copyInviteLink()">复制邀请链接</button>' +
       '</div>';
@@ -607,9 +642,7 @@
       qr.addData(url);
       qr.make();
       var container = document.getElementById('invite-qr-container');
-      if (container) {
-        container.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
-      }
+      if (container) container.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
     } catch (e) {
       var container = document.getElementById('invite-qr-container');
       if (container) container.innerHTML = '<span style="color:#9ca3af;font-size:12px">二维码生成失败</span>';
@@ -663,6 +696,8 @@
   App.togglePlayer = function (openId) {
     if (!state.isDealer || state.status !== 'opening') return;
     if (openId === state.playerId) return;
+    var p = state.otherPlayers.find(function (x) { return x.openId === openId; });
+    if (p && p.spectating) return;
 
     state.selectedPlayers[openId] = !state.selectedPlayers[openId];
     state.selectedCount = Object.values(state.selectedPlayers).filter(Boolean).length;
@@ -701,14 +736,22 @@
     }).catch(function () { hideLoading(); showToast('开牌失败'); });
   }
 
+  App.kickPlayer = function (targetPlayerId) {
+    if (!confirm('确定移出该玩家？')) return;
+    api('kickPlayer', { roomId: state.roomId, targetPlayerId: targetPlayerId }).then(function (result) {
+      if (!result.ok) showToast(result.message || '踢人失败');
+      else showToast('已移出玩家');
+    }).catch(function () { showToast('踢人失败'); });
+  };
+
   // ============================================================
   // Result Page
   // ============================================================
 
   function initResultPage() {
-    var rr = state.roundResult;
-    var allPlayers = state.roomPlayers || [];
+    joinSocketRoom(state.roomId);
 
+    var rr = state.roundResult;
     if (!rr) {
       $app().innerHTML = '<div class="result-page"><div style="text-align:center;padding-top:40px;color:#9ca3af">加载结果中...</div></div>';
       api('getRoom', { roomId: state.roomId }).then(function (result) {
@@ -720,7 +763,6 @@
       });
       return;
     }
-
     renderResult();
   }
 
@@ -731,6 +773,8 @@
 
     var publicCard = rr.publicCard || null;
     var dealerFullLoss = !!rr.dealerFullLoss;
+    var isDealer = state.playerId === rr.dealerOpenId || state.playerId === (state.room && state.room.dealerOpenId);
+    var isOwner = state.isOwner || (state.room && state.room.ownerOpenId === state.playerId);
 
     var dealerPlayer = allPlayers.find(function (p) { return p.openId === rr.dealerOpenId; });
     var dealerCards = [
@@ -783,12 +827,10 @@
 
     var html = '<div class="result-page">';
 
-    // Header
     html += '<div class="result-header"><span>房间号：' + escHtml(state.roomId) + '</span>';
     if (modeText) html += '<span class="mode-badge">' + escHtml(modeText) + '</span>';
     html += '</div>';
 
-    // Tips
     if (passDealer) html += '<div class="pass-dealer-tip">🔄 庄家全开全胜，自动过庄</div>';
     if (dealerFullLoss) html += '<div class="dealer-loss-tip">💥 庄家全开输了，所有注码合计记庄家喝酒</div>';
 
@@ -804,7 +846,6 @@
     html += '<div class="player-info"><span class="player-name">' + escHtml(dealer.nickName) + '</span>';
     html += '<span class="hand-type-tag">' + escHtml(dealer.handTypeName) + '</span></div></div>';
 
-    // Dealer cards
     html += '<div class="cards-row">';
     dealer.cards.forEach(function (c) {
       html += '<div class="card-with-label"><span class="card-label-mini">' + escHtml(c.label) + '</span>';
@@ -812,7 +853,6 @@
     });
     html += '</div>';
 
-    // Dealer score
     html += '<div class="score-change-row">';
     if (dealer.drinks > 0) html += '<span class="drinks-tag">🍺 喝 ' + dealer.drinks + ' 杯</span>';
     else html += '<span class="drinks-tag drinks-zero">未喝酒</span>';
@@ -845,18 +885,34 @@
     });
     html += '</div>';
 
-    // Back button
-    html += '<button class="back-btn" onclick="App.backToRoom()">返回游戏</button>';
-    html += '</div>';
+    // Bottom: only dealer/owner sees the "next round" button
+    if (isDealer || isOwner) {
+      html += '<button class="back-btn" onclick="App.nextRound()">下一局</button>';
+    } else {
+      html += '<div class="waiting-next-round">等待庄家开始下一局...</div>';
+    }
 
+    html += '</div>';
     $app().innerHTML = html;
   }
 
+  App.nextRound = function () {
+    showLoading('准备中...');
+    api('resetRound', { roomId: state.roomId }).then(function (result) {
+      hideLoading();
+      if (!result.ok) { showToast(result.message || '重置失败'); return; }
+      state.roundResult = null;
+      state.roomPlayers = [];
+      state.selectedPlayers = {};
+      state.selectedCount = 0;
+
+      if (result.autoPassed) showToast('牌组不足，自动过庄并洗牌', 2500);
+
+      navigate('/room/' + state.roomId + (state.isOwner ? '/owner' : ''));
+    }).catch(function () { hideLoading(); showToast('操作失败'); });
+  };
+
   App.backToRoom = function () {
-    localStorage.setItem('roomNeedResetRound', '1');
-    if (state.roundResult && state.roundResult.passDealer) {
-      localStorage.setItem('roomPassedDealer', '1');
-    }
     state.roundResult = null;
     state.roomPlayers = [];
     navigate('/room/' + state.roomId + (state.isOwner ? '/owner' : ''));
@@ -873,7 +929,7 @@
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState !== 'visible') return;
     if (socket && currentSocketRoom) {
-      socket.emit('joinRoom', currentSocketRoom);
+      socket.emit('joinRoom', currentSocketRoom, state.playerId);
     }
     if (state.currentPage === 'room' && state.roomId) {
       fetchRoom();
