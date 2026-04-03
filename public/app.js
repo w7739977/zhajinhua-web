@@ -185,6 +185,9 @@
     if (parts[0] === 'result' && parts[1]) {
       return { page: 'result', roomId: parts[1] };
     }
+    if (parts[0] === 'test') {
+      return { page: 'test' };
+    }
     return { page: 'lobby' };
   }
 
@@ -209,6 +212,9 @@
       case 'result':
         state.roomId = route.roomId;
         initResultPage();
+        break;
+      case 'test':
+        initTestPage();
         break;
       default:
         initLobbyPage();
@@ -916,6 +922,44 @@
     state.roundResult = null;
     state.roomPlayers = [];
     navigate('/room/' + state.roomId + (state.isOwner ? '/owner' : ''));
+  };
+
+  // ============================================================
+  // Test Page
+  // ============================================================
+
+  function initTestPage() {
+    var params = new URLSearchParams(window.location.search || '');
+    var key = params.get('key') || '';
+    if (!key) {
+      $app().innerHTML = '<div class="test-page"><div class="test-denied">无权访问，请在 URL 中提供 ?key=xxx</div></div>';
+      return;
+    }
+    window._testKey = key;
+    renderTestPage();
+  }
+
+  function renderTestPage() {
+    var html = '<div class="test-page">';
+    html += '<div class="test-header">';
+    html += '<h1 class="test-title">诈金花 自动化测试</h1>';
+    html += '<button class="btn btn-primary test-run-btn" id="test-run-btn" onclick="App.runTests()">运行测试</button>';
+    html += '</div>';
+    html += '<div class="test-progress-wrap"><div class="test-progress-bar" id="test-progress" style="width:0%"></div></div>';
+    html += '<div class="test-summary" id="test-summary"></div>';
+    html += '<div id="test-results"></div>';
+    html += '</div>';
+    $app().innerHTML = html;
+  }
+
+  App.runTests = function () {
+    if (typeof window.TestRunner === 'undefined') {
+      showToast('测试模块未加载');
+      return;
+    }
+    var btn = document.getElementById('test-run-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '运行中...'; }
+    window.TestRunner.run(window._testKey);
   };
 
   // ============================================================

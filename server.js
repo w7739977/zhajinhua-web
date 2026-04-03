@@ -815,6 +815,26 @@ io.on('connection', (socket) => {
   });
 });
 
+// ============================================================
+// Test utilities (key-protected)
+// ============================================================
+
+const TEST_KEY = process.env.TEST_KEY || 'zhajinhua2026';
+
+app.post('/api/_cleanTestRooms', (req, res) => {
+  if (req.body.key !== TEST_KEY) {
+    return res.json({ ok: false, code: 'UNAUTHORIZED', message: '密钥错误' });
+  }
+  let count = 0;
+  for (const [roomId] of roomStore) {
+    if (roomId.startsWith('_test_')) {
+      roomStore.delete(roomId);
+      count++;
+    }
+  }
+  res.json({ ok: true, cleaned: count });
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
