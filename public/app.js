@@ -578,6 +578,46 @@
 
   App.invite = function () {
     var url = window.location.origin + '/#/room/' + state.roomId;
+    var overlay = document.createElement('div');
+    overlay.className = 'invite-overlay';
+    overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+
+    var modal = document.createElement('div');
+    modal.className = 'invite-modal';
+
+    var header = '<div class="invite-header"><span class="invite-title">邀请好友</span><span class="invite-close" onclick="this.closest(\'.invite-overlay\').remove()">✕</span></div>';
+
+    var qrWrap = '<div class="invite-qr" id="invite-qr-container"></div>';
+
+    var info = '<div class="invite-info">' +
+      '<div class="invite-room">房间号：<span class="invite-room-id">' + escHtml(state.roomId) + '</span></div>' +
+      '<div class="invite-url">' + escHtml(url) + '</div>' +
+      '</div>';
+
+    var actions = '<div class="invite-actions">' +
+      '<button class="btn btn-primary invite-copy-btn" onclick="App.copyInviteLink()">复制邀请链接</button>' +
+      '</div>';
+
+    modal.innerHTML = header + qrWrap + info + actions;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    try {
+      var qr = qrcode(0, 'M');
+      qr.addData(url);
+      qr.make();
+      var container = document.getElementById('invite-qr-container');
+      if (container) {
+        container.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
+      }
+    } catch (e) {
+      var container = document.getElementById('invite-qr-container');
+      if (container) container.innerHTML = '<span style="color:#9ca3af;font-size:12px">二维码生成失败</span>';
+    }
+  };
+
+  App.copyInviteLink = function () {
+    var url = window.location.origin + '/#/room/' + state.roomId;
     copyText(url).then(function (ok) {
       if (ok) showToast('邀请链接已复制');
       else showToast('复制失败，房间号：' + state.roomId);

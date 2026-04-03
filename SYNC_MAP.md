@@ -129,7 +129,7 @@
 | `wx.getUserProfile()` | 自定义昵称输入框 | `app.js` → `App.confirmProfile()` |
 | `getApp().globalData` | `state` 对象 | `app.js` 顶部 |
 | `this.setData({...})` | 修改 `state` + 调用 `renderXxx()` | 各 render 函数 |
-| `button open-type="share"` | 复制链接到剪贴板 | `app.js` → `App.invite()` |
+| `button open-type="share"` | 二维码弹窗 + 复制链接 | `app.js` → `App.invite()` / `App.copyInviteLink()` |
 
 ---
 
