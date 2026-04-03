@@ -20,6 +20,8 @@
 | `cloudfunctions/bet/index.js` | `server.js` → `POST /api/bet` | 下注 |
 | `cloudfunctions/open/index.js` | `server.js` → `POST /api/open` | 开牌（含牌型引擎） |
 | `cloudfunctions/resetRound/index.js` | `server.js` → `POST /api/resetRound` | 新一局 |
+| — | `server.js` → `POST /api/kickPlayer` | 踢人（Web 独有） |
+| — | `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理（Web 独有，密钥保护） |
 
 > **改动规则**：修改任何云函数的业务逻辑时，必须同步修改 `server.js` 中对应的路由处理函数。
 
@@ -38,6 +40,17 @@
 | `pages/result/result.wxss` | `public/style.css` → `/* Result Page */` 区块 | 结果页样式 |
 | `app.js` | `public/app.js` → 顶部 `state` 对象 | 全局状态 |
 | `app.wxss` | `public/style.css` → 顶部全局样式 | 全局样式 |
+
+### 测试文件（Web 独有）
+
+| Web 版文件 | 说明 |
+|---|---|
+| `public/test-runner.js` | 部署后自动化测试运行器（44+ 用例，实时诊断） |
+| `public/app.js` → `initTestPage()` / `renderTestPage()` | 测试页路由与 UI |
+| `public/style.css` → `.test-*` 样式 | 测试页面样式（进度条、通过/失败状态） |
+| `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理接口（TEST_KEY 密钥保护） |
+
+> **访问方式**：`http://IP:端口/#/test?key=密钥`，密钥在 `server.js` 的 `TEST_KEY` 常量中配置。
 
 ### 配置文件
 
@@ -138,6 +151,7 @@
 | `button open-type="share"` | 二维码弹窗 + 复制链接 | `app.js` → `App.invite()` / `App.copyInviteLink()` |
 | — | 庄家踢人 | `app.js` → `App.kickPlayer()` → `POST /api/kickPlayer` |
 | — | 庄家下一局 | `app.js` → `App.nextRound()` → `POST /api/resetRound` + `roundReset` 事件 |
+| — | 部署后自动化测试 | `app.js` → `initTestPage()` + `test-runner.js` → `TestRunner.run()` |
 
 ---
 
@@ -217,4 +231,4 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] UI/样式变动 → 同步 WXSS & CSS（注意 rpx→px 换算）
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
 
-> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。
+> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能、部署后自动化测试目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。
