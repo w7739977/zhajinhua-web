@@ -121,7 +121,7 @@
 
   function initSocket() {
     if (socket) return;
-    socket = io();
+    socket = io({ reconnectionDelay: 1000, reconnectionDelayMax: 5000 });
 
     socket.on('roomUpdate', function (room) {
       if (state.currentPage === 'room' && room.roomId === state.roomId) {
@@ -829,5 +829,15 @@
   initSocket();
   window.addEventListener('hashchange', handleRoute);
   handleRoute();
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
+    if (socket && currentSocketRoom) {
+      socket.emit('joinRoom', currentSocketRoom);
+    }
+    if (state.currentPage === 'room' && state.roomId) {
+      fetchRoom();
+    }
+  });
 
 })();
