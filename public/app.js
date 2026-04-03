@@ -177,7 +177,8 @@
   }
 
   function parseRoute() {
-    var hash = window.location.hash.slice(1) || '/';
+    var rawHash = window.location.hash.slice(1) || '/';
+    var hash = rawHash.split('?')[0];
     var parts = hash.split('/').filter(Boolean);
     if (parts[0] === 'room' && parts[1]) {
       return { page: 'room', roomId: parts[1], isOwner: parts[2] === 'owner' };
@@ -929,10 +930,17 @@
   // ============================================================
 
   function initTestPage() {
-    var params = new URLSearchParams(window.location.search || '');
-    var key = params.get('key') || '';
+    var key = '';
+    var searchStr = window.location.search || '';
+    if (searchStr) {
+      key = new URLSearchParams(searchStr).get('key') || '';
+    }
     if (!key) {
-      $app().innerHTML = '<div class="test-page"><div class="test-denied">无权访问，请在 URL 中提供 ?key=xxx</div></div>';
+      var hashQuery = (window.location.hash || '').split('?')[1] || '';
+      if (hashQuery) key = new URLSearchParams(hashQuery).get('key') || '';
+    }
+    if (!key) {
+      $app().innerHTML = '<div class="test-page"><div class="test-denied">无权访问<br><br>请使用以下格式访问：<br><code style="color:#6ee7b7;font-size:13px">http://你的IP:端口/#/test?key=密钥</code></div></div>';
       return;
     }
     window._testKey = key;
