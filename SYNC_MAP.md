@@ -105,10 +105,12 @@
 | 监听房间变化 | `db.collection('rooms').where({roomId}).watch()` | `socket.on('roomUpdate', callback)` |
 | 触发更新 | 云函数写入数据库后 watch 自动触发 | API 路由调用 `broadcastRoom(roomId)` |
 | 断线重连 | `onError` → 3秒后 `_createWatcher()` | Socket.IO 自动重连 + `reconnect` 事件 |
+| 切后台恢复 | 小程序 `onShow()` 重新 `_createWatcher()` | `visibilitychange` → 重新 `joinRoom` + `fetchRoom()` |
 | 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)` |
 | 离开房间频道 | `watcher.close()` | `socket.emit('leaveRoom', roomId)` |
 
 > **改动规则**：如果修改了云函数中的数据库写入字段，Web 版 `broadcastRoom()` 调用的 `sanitizeRoom()` 也要同步返回该字段。
+> 修改小程序 `onShow` 恢复逻辑时，需同步修改 Web 版 `visibilitychange` 处理。
 
 ---
 
