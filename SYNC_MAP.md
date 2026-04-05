@@ -107,6 +107,14 @@
 | resetRound | `roomId` | — | `playerId` |
 | mockRoomAction | `roomId`, `action` | — | `playerId` |
 
+**Web `POST /api/resetRound` 成功响应（除 `ok`、`room` 外）**：
+
+| 字段 | 说明 |
+|------|------|
+| `autoPassed` | `true` 表示牌堆不够、已自动过庄并洗牌 |
+| `passDealerShuffle` | `true` 表示上一局 `roundResult.passDealer`（全开全胜过庄），本局已 `shuffle(createDeck())` |
+| `dealerOpenId` | 重置后当前庄家 |
+
 > **改动规则**：新增/修改接口参数时，两边同步改；Web 版始终多传 `playerId`。
 
 ---
@@ -125,6 +133,7 @@
 | 中途加入观战 | — | `joinRoom` → `spectating: true`，下轮自动参与 |
 | 选择开牌保留手牌 | — | `resetRound` 保留未选中玩家 `card`，标记 `retainedCard` |
 | 庄家下一局广播 | — | `resetRound` 发送 `roundReset` 事件，全员自动返回房间 |
+| 过庄后整副洗牌 | — | `executeResetRound`：`roundResult.passDealer` 时 `shuffle(createDeck())` 并清空全员手牌；否则沿用 `deck`，不足则自动过庄洗牌 |
 | 邀请直链进房 | — | `/#/room/:id` → `getRoom` 后若 `playerId ∉ players` 则 `renderPendingJoin`；确认后 `joinRoom` 再 `updateRoomView`（避免只看不入桌） |
 | 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)`（Socket 频道，与 HTTP 入桌分离） |
 | 离开房间频道 | `watcher.close()` | `socket.emit('leaveRoom', roomId)` |
@@ -238,6 +247,7 @@ CSS 类名两版保持一致，便于视觉联动调整：
 每次改动时对照此表打勾：
 
 - [ ] 游戏规则/牌型算法变动 → 同步 `open` 云函数 & `server.js` 引擎部分
+- [ ] 牌组 / 过庄洗牌 / `resetRound` 行为变动 → 同步 `resetRound` 云函数 & `executeResetRound` & 前端 toast（`passDealerShuffle` / `autoPassed`）
 - [ ] 接口参数变动 → 同步云函数 & API 路由 & 前端调用
 - [ ] 数据模型字段变动 → 同步云函数写入 & API 路由 & `sanitizeRoom()` & 前端渲染
 - [ ] 状态流转变动 → 同步所有涉及 `status` 判断的云函数 & API 路由 & 前端条件渲染
@@ -245,3 +255,5 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
 
 > **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）** 目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。
+>
+> **牌组**：Web 版已在 `executeResetRound` 实现 **全开全胜过庄（`passDealer`）后必洗 52 张**；小程序 `resetRound` 云函数若规则一致，须在 `passDealer` 时同样整副洗牌并清空本局手牌，避免与 Web 行为不一致。

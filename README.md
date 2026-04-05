@@ -154,7 +154,7 @@ cd ~/zhajinhua-web && git pull && pm2 restart zhajinhua-web
 | 权限控制 | 庄家/房主 resetRound、非庄被拒、非庄开牌被拒 |
 | 踢人功能 | 庄家踢人、非庄踢人被拒、不能踢自己 |
 | 边界防护 | 空房间号、不存在房间、缺 playerId、非 waiting 发牌被拒、重复下注被拒 |
-| 牌组管理 | 16 轮消耗后自动洗牌重新发牌 |
+| 牌组管理 | 16 轮消耗后自动洗牌；**全开全胜过庄**后下一局 `resetRound` 整副洗 52 张；牌不足时自动过庄洗牌 |
 | 静态资源 | 首页/app.js/style.css/qrcode.min.js/test-runner.js 200 |
 | Socket.IO | Socket.IO 握手连通性 |
 
@@ -162,3 +162,14 @@ cd ~/zhajinhua-web && git pull && pm2 restart zhajinhua-web
 - 每个失败用例附带完整 API 响应诊断（ok/code/message/room 状态）
 - 测试结束自动清理 `_test_` 前缀的测试房间
 - 异常捕获：脚本报错也能在页面显示具体错误信息
+
+### `resetRound` 接口（Web）响应要点
+
+| 字段 | 含义 |
+|------|------|
+| `autoPassed` | 因牌组不足触发的自动过庄并已洗牌 |
+| `passDealerShuffle` | 因上一局全开全胜过庄，本局 `resetRound` 已整副洗牌（52 张） |
+| `dealerOpenId` | 当前庄家 `openId` |
+| `room` | 重置后的房间快照 |
+
+结果页点「下一局」：若 `passDealerShuffle` 为真，前端会 toast「过庄并已重新洗牌（52 张）」。
