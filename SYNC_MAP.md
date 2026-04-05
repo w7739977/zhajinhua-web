@@ -125,7 +125,8 @@
 | 中途加入观战 | — | `joinRoom` → `spectating: true`，下轮自动参与 |
 | 选择开牌保留手牌 | — | `resetRound` 保留未选中玩家 `card`，标记 `retainedCard` |
 | 庄家下一局广播 | — | `resetRound` 发送 `roundReset` 事件，全员自动返回房间 |
-| 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)` |
+| 邀请直链进房 | — | `/#/room/:id` → `getRoom` 后若 `playerId ∉ players` 则 `renderPendingJoin`；确认后 `joinRoom` 再 `updateRoomView`（避免只看不入桌） |
+| 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)`（Socket 频道，与 HTTP 入桌分离） |
 | 离开房间频道 | `watcher.close()` | `socket.emit('leaveRoom', roomId)` |
 
 > **改动规则**：如果修改了云函数中的数据库写入字段，Web 版 `broadcastRoom()` 调用的 `sanitizeRoom()` 也要同步返回该字段。
@@ -152,6 +153,16 @@
 | — | 庄家踢人 | `app.js` → `App.kickPlayer()` → `POST /api/kickPlayer` |
 | — | 庄家下一局 | `app.js` → `App.nextRound()` → `POST /api/resetRound` + `roundReset` 事件 |
 | — | 部署后自动化测试 | `app.js` → `initTestPage()` + `test-runner.js` → `TestRunner.run()` |
+| — | 邀请链接先入桌 | `app.js` → `playerInRoom()` / `renderPendingJoin()` / `App.joinRoomFromInvite()` / `App.backToLobbyFromInvite()` |
+
+### 邀请链接进房（Web 独有流程说明）
+
+- **链接形态**：`/#/room/{roomId}`（与 `App.invite()` / `App.copyInviteLink()` 生成一致）。
+- **路由**：`handleRoute` → `initRoomPage()` → `fetchRoom()`（`getRoom`）。
+- **入桌判定**：`updateRoomView` 开头若 `!playerInRoom(room, state.playerId)`，不渲染牌桌，改为 `renderPendingJoin`。
+- **确认加入**：`App.joinRoomFromInvite()` → 校验昵称、写 `localStorage.userInfo` → `POST /api/joinRoom` → `updateRoomView(result.room)`。
+- **失败回退**：`getRoom` 非 `ok` 时 `navigate('/')`。
+- **小程序对照**：小程序通过分享进房仍走各自页面逻辑；若要对齐「直链必 join」，需在对应页面增加等价判定。
 
 ---
 
@@ -185,6 +196,8 @@ handTypeName, bet, result, playerDrinks, dealerDrinks
 ```
 
 > **改动规则**：新增/删除/重命名任何字段时，两边的读写代码都必须同步。
+
+**Web 版 `resetRound`（`executeResetRound`）牌组**：若上一局 `roundResult.passDealer === true`（全开全胜过庄），**强制** `shuffle(createDeck())` 并清空全员手牌，保证下一局从整副 52 张起算；否则沿用剩余 `deck`，仅当 `deck.length < 所需张数` 时自动过庄并洗牌。
 
 ---
 
@@ -231,4 +244,4 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] UI/样式变动 → 同步 WXSS & CSS（注意 rpx→px 换算）
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
 
-> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能、部署后自动化测试目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。
+> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）** 目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。

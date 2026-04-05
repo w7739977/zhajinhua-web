@@ -387,6 +387,8 @@ function executeOpen(room, roomId, mode, targetOpenIds) {
 function executeResetRound(room, roomId) {
   const openedPlayerIds = (room.roundResult && room.roundResult.openedPlayerIds) || [];
   const prevDealerOpenId = (room.roundResult && room.roundResult.dealerOpenId) || '';
+  /** 全开全胜过庄：下一局使用全新 52 张牌（与牌组不足过庄一致，避免牌越打越少） */
+  const passDealerLastRound = !!(room.roundResult && room.roundResult.passDealer);
 
   let dealerOpenId = room.dealerOpenId || room.ownerOpenId;
 
@@ -394,33 +396,46 @@ function executeResetRound(room, roomId) {
     p.spectating = false;
     p.autoBet = false;
 
-    const wasOpened = openedPlayerIds.includes(p.openId);
-    const wasDealer = p.openId === prevDealerOpenId;
-    const isNewDealer = p.openId === dealerOpenId;
-
-    if (wasDealer || wasOpened || isNewDealer || !p.card) {
+    if (passDealerLastRound) {
       p.hasDealt = false;
       p.card = null;
       p.retainedCard = false;
     } else {
-      p.retainedCard = true;
+      const wasOpened = openedPlayerIds.includes(p.openId);
+      const wasDealer = p.openId === prevDealerOpenId;
+      const isNewDealer = p.openId === dealerOpenId;
+
+      if (wasDealer || wasOpened || isNewDealer || !p.card) {
+        p.hasDealt = false;
+        p.card = null;
+        p.retainedCard = false;
+      } else {
+        p.retainedCard = true;
+      }
     }
 
     p.bet = null;
   });
 
-  const playersNeedCard = room.players.filter(p => !p.card);
-  const cardsNeeded = playersNeedCard.length + 1;
   let deck = room.deck;
   let autoPassed = false;
+  let passDealerShuffle = false;
 
-  if (deck.length < cardsNeeded) {
-    dealerOpenId = getNextDealer(room.players, dealerOpenId);
+  if (passDealerLastRound) {
     deck = shuffle(createDeck());
-    autoPassed = true;
-    room.players.forEach(p => {
-      p.hasDealt = false; p.card = null; p.retainedCard = false;
-    });
+    passDealerShuffle = true;
+  } else {
+    const playersNeedCard = room.players.filter(p => !p.card);
+    const cardsNeeded = playersNeedCard.length + 1;
+
+    if (deck.length < cardsNeeded) {
+      dealerOpenId = getNextDealer(room.players, dealerOpenId);
+      deck = shuffle(createDeck());
+      autoPassed = true;
+      room.players.forEach(p => {
+        p.hasDealt = false; p.card = null; p.retainedCard = false;
+      });
+    }
   }
 
   room.deck = deck;
@@ -431,7 +446,7 @@ function executeResetRound(room, roomId) {
   room.updatedAt = new Date();
 
   broadcastRoom(roomId);
-  return { autoPassed, dealerOpenId };
+  return { autoPassed, dealerOpenId, passDealerShuffle };
 }
 
 // ============================================================
@@ -691,7 +706,10 @@ app.post('/api/resetRound', (req, res) => {
     io.to(`room:${roomId}`).emit('roundReset', { roomId });
 
     res.json({
-      ok: true, autoPassed: result.autoPassed, dealerOpenId: result.dealerOpenId,
+      ok: true,
+      autoPassed: result.autoPassed,
+      passDealerShuffle: result.passDealerShuffle,
+      dealerOpenId: result.dealerOpenId,
       room: sanitizeRoom(room)
     });
   } catch (err) {

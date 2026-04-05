@@ -985,6 +985,7 @@
       state.selectedCount = 0;
 
       if (result.autoPassed) showToast('牌组不足，自动过庄并洗牌', 2500);
+      else if (result.passDealerShuffle) showToast('过庄并已重新洗牌（52 张）', 2500);
 
       navigate('/room/' + state.roomId + (state.isOwner ? '/owner' : ''));
     }).catch(function () { hideLoading(); showToast('操作失败'); });
