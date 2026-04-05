@@ -352,12 +352,78 @@
 
   function fetchRoom() {
     api('getRoom', { roomId: state.roomId }).then(function (result) {
-      if (!result.ok) { showToast(result.message || '房间不存在'); return; }
+      if (!result.ok) {
+        showToast(result.message || '房间不存在');
+        navigate('/');
+        return;
+      }
       updateRoomView(result.room);
     }).catch(function () {
       showToast('加载失败');
+      navigate('/');
     });
   }
+
+  function playerInRoom(room, openId) {
+    if (!room || !room.players || !openId) return false;
+    return room.players.some(function (p) { return p.openId === openId; });
+  }
+
+  /** 邀请链接直达房间时：尚未 joinRoom API，不在 players 里，需先填昵称并加入 */
+  function renderPendingJoin(room) {
+    var rid = room.roomId || state.roomId;
+    var html = '<div class="lobby-container pending-join-page">';
+    html += '<div class="lobby-title">加入房间</div>';
+    html += '<div class="auth-mask"><div class="auth-modal">';
+    html += '<div class="auth-header">';
+    html += '<span class="auth-title">房间号 ' + escHtml(rid) + '</span>';
+    html += '<span class="auth-desc">请输入昵称后加入，加入后房主即可发牌开始</span>';
+    html += '</div>';
+    if (state.userInfo && state.userInfo.nickName) {
+      html += '<div class="profile-preview">';
+      html += renderAvatar(state.userInfo.nickName, 60, '');
+      html += '<span class="profile-name">' + escHtml(state.userInfo.nickName) + '</span>';
+      html += '</div>';
+    }
+    html += '<div class="auth-action-group">';
+    html += '<div class="action-row input-row"><input class="action-input" placeholder="请输入你的昵称" maxlength="12" id="invite-nickname-input" value="' + escHtml((state.userInfo && state.userInfo.nickName) || '') + '"></div>';
+    html += '<div class="action-row btn-primary" onclick="App.joinRoomFromInvite()">确认加入</div>';
+    html += '<div class="action-row btn-secondary" onclick="App.backToLobbyFromInvite()">返回大厅</div>';
+    html += '</div></div></div></div>';
+    $app().innerHTML = html;
+  }
+
+  App.joinRoomFromInvite = function () {
+    var input = $('#invite-nickname-input');
+    var nick = (input && input.value || '').trim();
+    if (!nick) { showToast('请输入昵称'); return; }
+    state.userInfo = { nickName: nick };
+    localStorage.setItem('userInfo', JSON.stringify(state.userInfo));
+
+    showLoading('加入中...');
+    api('joinRoom', {
+      roomId: state.roomId,
+      nickName: nick,
+      avatarUrl: ''
+    }).then(function (result) {
+      hideLoading();
+      if (!result.ok) {
+        showToast(result.message || '加入失败');
+        return;
+      }
+      if (result.spectating) {
+        showToast('游戏进行中，你将观战本局', 3000);
+      }
+      updateRoomView(result.room);
+    }).catch(function () {
+      hideLoading();
+      showToast('加入失败');
+    });
+  };
+
+  App.backToLobbyFromInvite = function () {
+    navigate('/');
+  };
 
   function rotatePlayers(players, selfOpenId) {
     if (!selfOpenId) return players;
@@ -368,6 +434,11 @@
 
   function updateRoomView(room) {
     if (!room) return;
+
+    if (!playerInRoom(room, state.playerId)) {
+      renderPendingJoin(room);
+      return;
+    }
 
     var players = (room.players || []).map(function (p) {
       return Object.assign({}, p, {
