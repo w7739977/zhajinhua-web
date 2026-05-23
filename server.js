@@ -84,14 +84,28 @@ function compareHands(a, b) {
   return 0;
 }
 
-function findBestHand(publicCard, handCard) {
+function findBestHand(publicCard, handCard, opponentHand) {
   let bestHand = null;
   let bestWild = null;
   for (const suit of SUITS) {
     for (const rank of RANKS) {
       const wild = `${suit}${rank}`;
       const hand = evaluateThreeCards(publicCard, handCard, wild);
-      if (!bestHand || compareHands(hand, bestHand) > 0) {
+      if (!bestHand) {
+        bestHand = hand;
+        bestWild = wild;
+        continue;
+      }
+      if (opponentHand) {
+        // 主键：对手输赢（归一化 sign，避免被 cmp 差值大小误导）；副键：绝对强度（tiebreak）。
+        // 覆盖 235 反杀豹子等上下文相关情形。
+        const newSign = Math.sign(compareHands(hand, opponentHand));
+        const oldSign = Math.sign(compareHands(bestHand, opponentHand));
+        if (newSign > oldSign || (newSign === oldSign && compareHands(hand, bestHand) > 0)) {
+          bestHand = hand;
+          bestWild = wild;
+        }
+      } else if (compareHands(hand, bestHand) > 0) {
         bestHand = hand;
         bestWild = wild;
       }
@@ -307,7 +321,7 @@ function executeOpen(room, roomId, mode, targetOpenIds) {
     const target = roundPlayers.find(p => p.openId === targetId);
     if (!target || !target.card) continue;
 
-    const targetBest = findBestHand(publicCard, target.card);
+    const targetBest = findBestHand(publicCard, target.card, dealerBest.hand);
     const cmp = compareHands(dealerBest.hand, targetBest.hand);
     const bet = target.bet || 0;
     const result = cmp >= 0 ? 'dealerWin' : 'playerWin';

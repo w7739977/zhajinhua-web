@@ -69,13 +69,15 @@
 |---|---|---|
 | `evaluateThreeCards()` | `cloudfunctions/open/index.js` L48-98 | `server.js` 搜索 `evaluateThreeCards` |
 | `compareHands()` | `cloudfunctions/open/index.js` L100-110 | `server.js` 搜索 `compareHands` |
-| `findBestHand()` | `cloudfunctions/open/index.js` L112-128 | `server.js` 搜索 `findBestHand` |
+| `findBestHand()` | `cloudfunctions/open/cardEngine.js` `findBestHand(public, hand, opponentHand?)` | `server.js` 搜索 `findBestHand`，同签名 |
 | `rankValue()` | `cloudfunctions/open/index.js` L34-40 | `server.js` 搜索 `rankValue` |
 | `parseCard()` | `cloudfunctions/open/index.js` L42-46 | `server.js` 搜索 `parseCard` |
 | `getNextDealer()` | `cloudfunctions/open/index.js` L130-134 | `server.js` 搜索 `getNextDealer` |
 | `createDeck()` / `shuffle()` | `cloudfunctions/createRoom/index.js` L10-29 | `server.js` 搜索 `createDeck` / `shuffle` |
 
 > **改动规则**：修改任何牌型判断、比大小逻辑、洗牌算法时，两边必须逐行同步。
+>
+> **`findBestHand(publicCard, handCard, opponentHand?)`**：第三参数 `opponentHand` 可选；传入时按 `Math.sign(compareHands(hand, opponentHand))` 做主键、绝对强度做副键挑选万能牌，覆盖 235 反杀豹子等上下文相关情形。`executeOpen` 中庄家不传（一对多无单一对手），各目标传 `dealerBest.hand`。两边须同步。
 
 ---
 
