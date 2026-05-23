@@ -143,9 +143,10 @@
     var t5_1 = register(G5, '非庄resetRound被拒');
     var t5_2 = register(G5, '庄家resetRound成功');
 
-    var t6_1 = register(G6, '非庄踢人被拒');
-    var t6_2 = register(G6, '庄家踢人成功');
+    var t6_1 = register(G6, '非房主踢人被拒');
+    var t6_2 = register(G6, '房主踢人成功(无需 offline)');
     var t6_3 = register(G6, '不能踢自己');
+    var t6_4 = register(G6, '踢庄家后庄家迁移');
 
     var t7_1 = register(G7, '全开');
     var t7_2 = register(G7, 'openedPlayerIds 完整');
@@ -340,21 +341,37 @@
       if (r5_2r.ok) dealer = r5_2r.dealerOpenId;
 
       // =============== G6: 踢人 ===============
-      var nonOwner = [B, C, D].filter(function (x) { return x !== dealer; })[0];
-      var r6_1r = await ms(t6_1, function () { return post('kickPlayer', { playerId: nonOwner, roomId: roomId, targetPlayerId: D }); });
-      check(t6_1, !r6_1r.ok, 'ok=' + r6_1r.ok + ' code=' + r6_1r.code + ' (expect NOT_AUTHORIZED)');
+      // 非房主（B）踢人应被拒，且 D 仍在房间
+      var r6_1r = await ms(t6_1, function () { return post('kickPlayer', { playerId: B, roomId: roomId, targetPlayerId: D }); });
+      check(t6_1, !r6_1r.ok && r6_1r.code === 'NOT_OWNER', 'ok=' + r6_1r.ok + ' code=' + r6_1r.code + ' (expect NOT_OWNER)');
 
-      var r6_2r = await ms(t6_2, function () { return post('kickPlayer', { playerId: dealer, roomId: roomId, targetPlayerId: D }); });
+      // 房主（A）踢 D 成功（D 在线，验证无需 offline 也可踢）
+      var r6_2r = await ms(t6_2, function () { return post('kickPlayer', { playerId: A, roomId: roomId, targetPlayerId: D }); });
       check(t6_2, r6_2r.ok && !r6_2r.room.players.find(function (p) { return p.openId === D; }),
         'ok=' + r6_2r.ok + ' D still in=' + !!(r6_2r.room && r6_2r.room.players.find(function (p) { return p.openId === D; })));
 
-      var r6_3r = await ms(t6_3, function () { return post('kickPlayer', { playerId: dealer, roomId: roomId, targetPlayerId: dealer }); });
+      // 房主不能踢自己
+      var r6_3r = await ms(t6_3, function () { return post('kickPlayer', { playerId: A, roomId: roomId, targetPlayerId: A }); });
       check(t6_3, !r6_3r.ok && r6_3r.code === 'CANNOT_KICK_SELF',
         'ok=' + r6_3r.ok + ' code=' + r6_3r.code);
 
+      // 踢掉庄家后，房间应自动指派新庄家（非被踢者）
+      var rBeforeKick = await post('getRoom', { playerId: A, roomId: roomId });
+      var curDealer = rBeforeKick.ok ? rBeforeKick.room.dealerOpenId : dealer;
+      var kickDealerTarget = (curDealer && curDealer !== A) ? curDealer : B;
+      var r6_4r = await ms(t6_4, function () { return post('kickPlayer', { playerId: A, roomId: roomId, targetPlayerId: kickDealerTarget }); });
+      var newDealerOk = r6_4r.ok && r6_4r.room && r6_4r.room.dealerOpenId && r6_4r.room.dealerOpenId !== kickDealerTarget &&
+        !!r6_4r.room.players.find(function (p) { return p.openId === r6_4r.room.dealerOpenId; });
+      check(t6_4, newDealerOk,
+        'ok=' + r6_4r.ok + ' kickedDealer=' + kickDealerTarget + ' newDealer=' + (r6_4r.room && r6_4r.room.dealerOpenId));
+      if (r6_4r.ok) dealer = r6_4r.room.dealerOpenId;
+
       // =============== G7: 全开 ===============
+      // 经 G6 多次踢人后房间可能只剩 2 人，从当前房间快照取真实玩家列表
+      var rRoom7 = await post('getRoom', { playerId: A, roomId: roomId });
+      var remainIds7 = rRoom7.ok ? rRoom7.room.players.map(function (p) { return p.openId; }) : [A, B, C];
       await post('deal', { playerId: dealer, roomId: roomId });
-      var nd7 = getNonDealer([A, B, C], dealer);
+      var nd7 = getNonDealer(remainIds7, dealer);
       for (var i7 = 0; i7 < nd7.length; i7++) await post('bet', { playerId: nd7[i7], roomId: roomId, bet: 2 });
       var r7_1r = await ms(t7_1, function () { return post('open', { playerId: dealer, roomId: roomId, mode: 'openAll', selectedOpenIds: [] }); });
       check(t7_1, r7_1r.ok, 'ok=' + r7_1r.ok + ' code=' + r7_1r.code);

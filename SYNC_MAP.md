@@ -20,7 +20,7 @@
 | `cloudfunctions/bet/index.js` | `server.js` → `POST /api/bet` | 下注 |
 | `cloudfunctions/open/index.js` | `server.js` → `POST /api/open` | 开牌（含牌型引擎） |
 | `cloudfunctions/resetRound/index.js` | `server.js` → `POST /api/resetRound` | 新一局 |
-| — | `server.js` → `POST /api/kickPlayer` | 踢人（Web 独有） |
+| — | `server.js` → `POST /api/kickPlayer` | 踢人（Web 独有）：仅房主，任意时刻可踢，踢中庄家自动迁移 |
 | — | `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理（Web 独有，密钥保护） |
 
 > **改动规则**：修改任何云函数的业务逻辑时，必须同步修改 `server.js` 中对应的路由处理函数。
@@ -159,7 +159,7 @@
 | `getApp().globalData` | `state` 对象 | `app.js` 顶部 |
 | `this.setData({...})` | 修改 `state` + 调用 `renderXxx()` | 各 render 函数 |
 | `button open-type="share"` | 二维码弹窗 + 复制链接 | `app.js` → `App.invite()` / `App.copyInviteLink()` |
-| — | 庄家踢人 | `app.js` → `App.kickPlayer()` → `POST /api/kickPlayer` |
+| — | 房主踢人（✕+确认弹窗） | `app.js` → `App.kickPlayer(targetId, targetNickName)` → `POST /api/kickPlayer`；服务端权限：`playerId === ownerOpenId` |
 | — | 庄家下一局 | `app.js` → `App.nextRound()` → `POST /api/resetRound` + `roundReset` 事件 |
 | — | 部署后自动化测试 | `app.js` → `initTestPage()` + `test-runner.js` → `TestRunner.run()` |
 | — | 邀请链接先入桌 | `app.js` → `playerInRoom()` / `renderPendingJoin()` / `App.joinRoomFromInvite()` / `App.backToLobbyFromInvite()` |
@@ -254,6 +254,6 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] UI/样式变动 → 同步 WXSS & CSS（注意 rpx→px 换算）
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
 
-> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）** 目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。
+> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能（仅房主、任意时刻、踢中庄家自动迁移）、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）** 目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。
 >
 > **牌组**：Web 版已在 `executeResetRound` 实现 **全开全胜过庄（`passDealer`）后必洗 52 张**；小程序 `resetRound` 云函数若规则一致，须在 `passDealer` 时同样整副洗牌并清空本局手牌，避免与 Web 行为不一致。

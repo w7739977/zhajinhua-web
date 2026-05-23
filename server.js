@@ -729,8 +729,8 @@ app.post('/api/kickPlayer', (req, res) => {
     const room = roomStore.get(roomId);
     if (!room) return res.json({ ok: false, code: 'ROOM_NOT_FOUND', message: '房间不存在' });
 
-    if (playerId !== room.dealerOpenId && playerId !== room.ownerOpenId) {
-      return res.json({ ok: false, code: 'NOT_AUTHORIZED', message: '只有庄家或房主才能踢人' });
+    if (playerId !== room.ownerOpenId) {
+      return res.json({ ok: false, code: 'NOT_OWNER', message: '只有房主才能踢人' });
     }
 
     if (targetPlayerId === playerId) {
@@ -740,12 +740,19 @@ app.post('/api/kickPlayer', (req, res) => {
     const target = room.players.find(p => p.openId === targetPlayerId);
     if (!target) return res.json({ ok: false, code: 'PLAYER_NOT_FOUND', message: '目标玩家不在房间' });
 
+    const wasDealer = room.dealerOpenId === targetPlayerId;
+
     removePlayerFromRoom(room, targetPlayerId);
 
     const timerKey = `${roomId}:${targetPlayerId}`;
     if (offlineTimers.has(timerKey)) {
       clearTimeout(offlineTimers.get(timerKey));
       offlineTimers.delete(timerKey);
+    }
+
+    if (wasDealer && room.players.length > 0) {
+      const nextDealer = room.players.find(p => !p.spectating) || room.players[0];
+      room.dealerOpenId = nextDealer.openId;
     }
 
     io.to(`room:${roomId}`).emit('playerKicked', { roomId, kickedPlayerId: targetPlayerId });
@@ -758,7 +765,7 @@ app.post('/api/kickPlayer', (req, res) => {
     if (room.status === 'betting') {
       const roundPlayers = getRoundPlayers(room);
       const nonDealer = roundPlayers.filter(p => p.openId !== room.dealerOpenId);
-      if (nonDealer.every(p => p.bet != null)) {
+      if (nonDealer.length > 0 && nonDealer.every(p => p.bet != null)) {
         room.status = 'opening';
       }
     }

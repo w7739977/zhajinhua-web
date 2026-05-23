@@ -797,22 +797,70 @@ input, textarea {
   z-index: 1;
 }
 
-/* Kick button */
+/* Kick button (✕ on avatar top-right) */
 .kick-btn {
-  margin-top: 3px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 9px;
-  font-weight: 600;
-  background: rgba(239, 68, 68, 0.18);
-  color: #fca5a5;
-  border: 1px solid rgba(239, 68, 68, 0.35);
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(252, 165, 165, 0.5);
+  background: rgba(220, 38, 38, 0.92);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   cursor: pointer;
+  z-index: 3;
+  transition: transform 0.1s;
 }
 
-.kick-btn:active {
-  background: rgba(239, 68, 68, 0.3);
+.kick-btn:active { transform: scale(0.9); }
+.kick-btn:hover { background: #dc2626; }
+
+/* Kick confirmation modal */
+.kick-modal {
+  max-width: 320px;
+  padding: 22px 20px 18px;
+  text-align: center;
+  gap: 12px;
 }
+
+.kick-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #fef3c7;
+}
+
+.kick-desc {
+  font-size: 13px;
+  color: #d1d5db;
+  line-height: 1.55;
+}
+
+.kick-desc b { color: #fbbf24; }
+
+.kick-actions {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.kick-actions .btn { flex: 1; }
+
+.btn-red {
+  background: linear-gradient(180deg, #f87171 0%, #ef4444 14%, #dc2626 48%, #b91c1c 100%);
+  border-color: rgba(252, 165, 165, 0.2);
+  color: #f9fafb;
+}
+.btn-red:active { filter: brightness(0.9); }
 
 /* Spectating banner */
 .spectating-banner {

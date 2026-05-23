@@ -38,6 +38,16 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  function jsAttr(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, '\\x27')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '\\x3c')
+      .replace(/>/g, '\\x3e');
+  }
+
   // ============================================================
   // Toast & Loading
   // ============================================================
@@ -549,20 +559,22 @@
     var onclick = (isSelectable && !p.spectating) ? ' onclick="App.togglePlayer(\'' + p.openId + '\')"' : '';
     var offlineClass = p.offline ? ' player-offline' : '';
 
+    var realOwnerId = state.room && state.room.ownerOpenId;
+    var isRealOwner = !!realOwnerId && realOwnerId === state.playerId;
+    var canKick = isRealOwner && !p.isSelf;
+
     var html = '<div class="other-player-item ' + selectedClass + clickable + offlineClass + '"' + onclick + '>';
     html += '<div class="seat-base"></div>';
     html += '<div class="avatar-wrap">';
     html += renderAvatar(p.nickName, 36, avatarClass);
     if (p.isDealer) html += '<span class="crown-badge">👑</span>';
     if (p.offline) html += '<span class="offline-overlay"></span>';
+    if (canKick) {
+      html += '<button class="kick-btn" onclick="event.stopPropagation();App.kickPlayer(\'' + jsAttr(p.openId) + '\',\'' + jsAttr(p.nickName) + '\')" title="移出 ' + escHtml(p.nickName) + '">✕</button>';
+    }
     html += '</div>';
     html += '<span class="nickname">' + escHtml(p.nickName || '玩家') + '</span>';
     html += playerStatusTags(p, status);
-
-    var canKick = (state.isDealer || state.isOwner) && p.offline && !p.isSelf;
-    if (canKick) {
-      html += '<button class="kick-btn" onclick="event.stopPropagation();App.kickPlayer(\'' + p.openId + '\')">移出</button>';
-    }
 
     html += '</div>';
     return html;
@@ -814,12 +826,36 @@
     }).catch(function () { hideLoading(); showToast('开牌失败'); });
   }
 
-  App.kickPlayer = function (targetPlayerId) {
-    if (!confirm('确定移出该玩家？')) return;
-    api('kickPlayer', { roomId: state.roomId, targetPlayerId: targetPlayerId }).then(function (result) {
-      if (!result.ok) showToast(result.message || '踢人失败');
-      else showToast('已移出玩家');
-    }).catch(function () { showToast('踢人失败'); });
+  App.kickPlayer = function (targetPlayerId, targetNickName) {
+    if (!targetPlayerId) return;
+
+    var overlay = document.createElement('div');
+    overlay.className = 'invite-overlay';
+    overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+
+    var modal = document.createElement('div');
+    modal.className = 'invite-modal kick-modal';
+    modal.innerHTML =
+      '<div class="kick-title">移出玩家？</div>' +
+      '<div class="kick-desc">将 <b>' + escHtml(targetNickName || '该玩家') + '</b> 移出房间。<br>游戏中也可移出，本局未结算的下注作废。</div>' +
+      '<div class="kick-actions">' +
+        '<button class="btn btn-secondary kick-cancel-btn">取消</button>' +
+        '<button class="btn btn-red kick-confirm-btn">确认移出</button>' +
+      '</div>';
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    modal.querySelector('.kick-cancel-btn').onclick = function () { overlay.remove(); };
+    modal.querySelector('.kick-confirm-btn').onclick = function () {
+      overlay.remove();
+      showLoading('移出中...');
+      api('kickPlayer', { roomId: state.roomId, targetPlayerId: targetPlayerId }).then(function (result) {
+        hideLoading();
+        if (!result.ok) { showToast(result.message || '踢人失败'); return; }
+        showToast('已移出 ' + (targetNickName || '玩家'));
+      }).catch(function () { hideLoading(); showToast('踢人失败'); });
+    };
   };
 
   // ============================================================
