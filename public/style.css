@@ -511,9 +511,9 @@ input, textarea {
 
 /* Poker card */
 .poker-card {
-  width: 35px;
-  height: 50px;
-  border-radius: 5px;
+  width: 48px;
+  height: 67px;
+  border-radius: 6px;
   border: 1px solid rgba(243, 244, 246, 0.24);
   background: #f9fafb;
   display: inline-flex;
@@ -525,17 +525,21 @@ input, textarea {
 }
 
 .poker-card-large {
-  width: 45px;
-  height: 63px;
+  width: 60px;
+  height: 84px;
   box-shadow:
     0 9px 20px rgba(0, 0, 0, 0.42),
     0 0 14px rgba(255, 255, 255, 0.1);
 }
 
 .poker-card-text {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 700;
   color: #111827;
+}
+
+.poker-card-large .poker-card-text {
+  font-size: 27px;
 }
 
 .poker-card-text-red { color: #dc2626; }
