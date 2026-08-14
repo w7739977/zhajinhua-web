@@ -412,6 +412,116 @@ input, textarea {
 
 .avatar-wrap { position: relative; display: inline-block; }
 
+.prop-avatar-target {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.prop-avatar-target:active .avatar {
+  transform: scale(0.94);
+}
+
+.prop-menu-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.prop-menu {
+  position: fixed;
+  width: 132px;
+  height: 66px;
+  padding: 5px;
+  display: flex;
+  gap: 4px;
+  border: 1px solid rgba(250, 204, 21, 0.38);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(9, 30, 22, 0.97), rgba(18, 54, 38, 0.98));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  animation: propMenuIn 140ms cubic-bezier(.2,.82,.35,1);
+}
+
+.prop-menu::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -6px;
+  width: 11px;
+  height: 11px;
+  transform: translateX(-50%) rotate(45deg);
+  background: #123626;
+  border-left: 1px solid rgba(250, 204, 21, 0.34);
+  border-top: 1px solid rgba(250, 204, 21, 0.34);
+}
+
+.prop-menu--up::after {
+  top: auto;
+  bottom: -6px;
+  border-left: 0;
+  border-top: 0;
+  border-right: 1px solid rgba(250, 204, 21, 0.34);
+  border-bottom: 1px solid rgba(250, 204, 21, 0.34);
+}
+
+.prop-menu-button {
+  width: 59px;
+  height: 56px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  color: #fef3c7;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: transform 100ms ease, background 100ms ease;
+}
+
+.prop-menu-button:active {
+  transform: scale(0.92);
+  background: rgba(250, 204, 21, 0.12);
+}
+
+.prop-menu-button img {
+  width: 35px;
+  height: 35px;
+  object-fit: contain;
+  pointer-events: none;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35));
+}
+
+.prop-effect {
+  position: fixed;
+  z-index: 35;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  will-change: transform, opacity;
+}
+
+.prop-projectile {
+  filter: drop-shadow(0 5px 6px rgba(0, 0, 0, 0.42));
+}
+
+.prop-impact,
+.prop-splat {
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.28));
+}
+
+@keyframes propMenuIn {
+  from { opacity: 0; transform: translateY(4px) scale(0.92); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prop-menu { animation-duration: 1ms; }
+  .prop-avatar-target:active .avatar { transform: none; }
+}
+
 .other-player-item .avatar {
   width: 36px;
   height: 36px;

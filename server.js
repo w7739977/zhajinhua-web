@@ -732,7 +732,7 @@ app.post('/api/resetRound', (req, res) => {
   }
 });
 
-app.post('/api/kickPlayer', (req, res) => {
+app.post('/api/kickPlayer', async (req, res) => {
   try {
     const { playerId, roomId: rawRoomId, targetPlayerId } = req.body;
     if (!playerId) return res.json({ ok: false, code: 'NO_PLAYER_ID', message: '缺少玩家ID' });
@@ -769,7 +769,15 @@ app.post('/api/kickPlayer', (req, res) => {
       room.dealerOpenId = nextDealer.openId;
     }
 
-    io.to(`room:${roomId}`).emit('playerKicked', { roomId, kickedPlayerId: targetPlayerId });
+    const targetSocketId = playerSocketMap.get(targetPlayerId);
+    const targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
+    if (targetSocket) {
+      io.to(targetSocketId).emit('playerKicked', { roomId, kickedPlayerId: targetPlayerId });
+      await targetSocket.leave(`room:${roomId}`);
+    }
+    if (playerSocketMap.get(targetPlayerId) === targetSocketId) {
+      playerSocketMap.delete(targetPlayerId);
+    }
 
     if (checkMinPlayers(room)) {
       broadcastRoom(roomId);
@@ -802,32 +810,106 @@ io.on('connection', (socket) => {
   let socketPlayerId = null;
   let socketRoomId = null;
 
-  socket.on('joinRoom', (roomId, playerId) => {
-    socket.join(`room:${roomId}`);
-    if (playerId) {
+  socket.on('joinRoom', async (roomId, playerId, callback) => {
+    try {
+      await socket.join(`room:${roomId}`);
+      const room = roomStore.get(roomId);
+      const p = room && playerId ? room.players.find(x => x.openId === playerId) : null;
+      if (!p) {
+        if (typeof callback === 'function') callback({ ok: true, member: false });
+        return;
+      }
+
       socketPlayerId = playerId;
       socketRoomId = roomId;
       playerSocketMap.set(playerId, socket.id);
 
-      const room = roomStore.get(roomId);
-      if (room) {
-        const p = room.players.find(x => x.openId === playerId);
-        if (p && p.offline) {
-          p.offline = false;
-          const timerKey = `${roomId}:${playerId}`;
-          if (offlineTimers.has(timerKey)) {
-            clearTimeout(offlineTimers.get(timerKey));
-            offlineTimers.delete(timerKey);
-          }
-          room.updatedAt = new Date();
-          broadcastRoom(roomId);
+      if (p.offline) {
+        p.offline = false;
+        const timerKey = `${roomId}:${playerId}`;
+        if (offlineTimers.has(timerKey)) {
+          clearTimeout(offlineTimers.get(timerKey));
+          offlineTimers.delete(timerKey);
         }
+        room.updatedAt = new Date();
+        broadcastRoom(roomId);
       }
+      if (typeof callback === 'function') callback({ ok: true, member: true });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, code: 'JOIN_FAILED', message: err.message });
     }
   });
 
-  socket.on('leaveRoom', (roomId) => {
-    socket.leave(`room:${roomId}`);
+  socket.on('leaveRoom', async (roomId, callback) => {
+    try {
+      await socket.leave(`room:${roomId}`);
+      if (typeof callback === 'function') callback({ ok: true });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, code: 'LEAVE_FAILED', message: err.message });
+    }
+  });
+
+  socket.on('throwProp', (payload, callback) => {
+    const data = payload || {};
+    const fail = (code, message) => {
+      if (typeof callback === 'function') callback({ ok: false, code, message });
+    };
+
+    if (!socketPlayerId || socketRoomId !== data.roomId) {
+      fail('SENDER_NOT_IN_ROOM', '发送者不在房间中');
+      return;
+    }
+
+    const room = roomStore.get(data.roomId);
+    if (!room) {
+      fail('ROOM_NOT_FOUND', '房间不存在');
+      return;
+    }
+    if (!['waiting', 'betting', 'opening'].includes(room.status)) {
+      fail('WRONG_STATUS', '当前阶段不能使用互动道具');
+      return;
+    }
+    const sender = room.players.find(p => p.openId === socketPlayerId);
+    if (!sender) {
+      fail('SENDER_NOT_IN_ROOM', '发送者不在房间中');
+      return;
+    }
+    const target = room.players.find(p => p.openId === data.targetPlayerId);
+    if (!target) {
+      fail('TARGET_NOT_FOUND', '目标玩家不在房间中');
+      return;
+    }
+    if (data.targetPlayerId === socketPlayerId) {
+      fail('CANNOT_TARGET_SELF', '不能向自己扔道具');
+      return;
+    }
+    if (data.propType !== 'egg' && data.propType !== 'tomato') {
+      fail('INVALID_PROP', '无效的道具类型');
+      return;
+    }
+    if (playerSocketMap.get(socketPlayerId) !== socket.id) {
+      fail('STALE_SOCKET', '当前连接已失效');
+      return;
+    }
+    if (!socket.rooms.has(`room:${data.roomId}`)) {
+      fail('SENDER_NOT_IN_ROOM', '发送者已离开房间频道');
+      return;
+    }
+
+    const now = Date.now();
+    if (now - (socket.data.lastPropAt || 0) < 1000) {
+      fail('RATE_LIMITED', '操作过于频繁');
+      return;
+    }
+    socket.data.lastPropAt = now;
+
+    io.to(`room:${data.roomId}`).emit('propThrown', {
+      roomId: data.roomId,
+      senderPlayerId: socketPlayerId,
+      targetPlayerId: data.targetPlayerId,
+      propType: data.propType
+    });
+    if (typeof callback === 'function') callback({ ok: true });
   });
 
   socket.on('disconnect', () => {
@@ -864,9 +946,15 @@ app.post('/api/_cleanTestRooms', (req, res) => {
   if (req.body.key !== TEST_KEY) {
     return res.json({ ok: false, code: 'UNAUTHORIZED', message: '密钥错误' });
   }
+  const ownerPrefix = String(req.body.ownerPrefix || '');
+  if (!ownerPrefix.startsWith('_test_')) {
+    return res.json({ ok: false, code: 'INVALID_TEST_PREFIX', message: '测试前缀无效' });
+  }
+
   let count = 0;
-  for (const [roomId] of roomStore) {
-    if (roomId.startsWith('_test_')) {
+  for (const [roomId, room] of roomStore) {
+    const ownerId = room && room.ownerOpenId;
+    if (ownerId && ownerId.startsWith(ownerPrefix)) {
       roomStore.delete(roomId);
       count++;
     }

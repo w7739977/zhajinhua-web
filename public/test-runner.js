@@ -24,6 +24,114 @@
     catch (e) { return String(obj); }
   }
 
+  function delay(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function connectTestSocket() {
+    return new Promise(function (resolve, reject) {
+      var socket = io({ forceNew: true, reconnection: false });
+      var timer = setTimeout(function () {
+        socket.disconnect();
+        reject(new Error('Socket 连接超时'));
+      }, 2000);
+
+      socket.once('connect', function () {
+        clearTimeout(timer);
+        resolve(socket);
+      });
+      socket.once('connect_error', function (err) {
+        clearTimeout(timer);
+        socket.disconnect();
+        reject(err || new Error('Socket 连接失败'));
+      });
+    });
+  }
+
+  function emitWithAck(socket, eventName, payload, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () {
+        reject(new Error(eventName + ' ACK 超时'));
+      }, timeoutMs || 1500);
+
+      socket.emit(eventName, payload, function (response) {
+        clearTimeout(timer);
+        resolve(response);
+      });
+    });
+  }
+
+  function emitArgsWithAck(socket, eventName, args, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () {
+        reject(new Error(eventName + ' ACK 超时'));
+      }, timeoutMs || 1500);
+      var emitArgs = [eventName].concat(args || [], [function (response) {
+        clearTimeout(timer);
+        resolve(response);
+      }]);
+      socket.emit.apply(socket, emitArgs);
+    });
+  }
+
+  function waitForEvent(socket, eventName, predicate, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () {
+        socket.off(eventName, handler);
+        reject(new Error('等待 ' + eventName + ' 超时'));
+      }, timeoutMs || 1500);
+
+      function handler(data) {
+        if (predicate && !predicate(data)) return;
+        clearTimeout(timer);
+        socket.off(eventName, handler);
+        resolve(data);
+      }
+
+      socket.on(eventName, handler);
+    });
+  }
+
+  function expectNoEvent(socket, eventName, predicate, timeoutMs) {
+    return new Promise(function (resolve) {
+      var timer = setTimeout(function () {
+        socket.off(eventName, handler);
+        resolve(true);
+      }, timeoutMs || 250);
+
+      function handler(data) {
+        if (predicate && !predicate(data)) return;
+        clearTimeout(timer);
+        socket.off(eventName, handler);
+        resolve(false);
+      }
+
+      socket.on(eventName, handler);
+    });
+  }
+
+  function roomStateSnapshot(room) {
+    if (!room) return null;
+    return {
+      status: room.status,
+      dealerOpenId: room.dealerOpenId,
+      publicCard: room.publicCard,
+      roundResult: room.roundResult,
+      players: (room.players || []).map(function (p) {
+        return {
+          openId: p.openId,
+          hasDealt: p.hasDealt,
+          card: p.card,
+          bet: p.bet,
+          score: p.score,
+          spectating: p.spectating,
+          offline: p.offline,
+          retainedCard: p.retainedCard
+        };
+      })
+    };
+  }
+
   function updateUI() {
     var el = document.getElementById('test-results');
     if (!el) return;
@@ -113,6 +221,7 @@
     var G9 = '9. 牌组管理';
     var G10 = '10. 静态资源';
     var G11 = '11. Socket.IO 连通';
+    var G12 = '12. 玩家道具互动';
 
     var t1_1 = register(G1, '创建房间');
     var t1_2 = register(G1, '玩家B加入');
@@ -165,17 +274,43 @@
     var t10_3 = register(G10, 'style.css 200');
     var t10_4 = register(G10, 'qrcode.min.js 200');
     var t10_5 = register(G10, 'test-runner.js 200');
+    var t10_6 = register(G10, '鸡蛋飞行模型 200');
+    var t10_7 = register(G10, '鸡蛋命中效果 200');
+    var t10_8 = register(G10, '鸡蛋飞溅效果 200');
+    var t10_9 = register(G10, '西红柿飞行模型 200');
+    var t10_10 = register(G10, '西红柿命中效果 200');
+    var t10_11 = register(G10, '西红柿飞溅效果 200');
 
     var t11_1 = register(G11, 'Socket.IO 握手');
 
+    var t12_1 = register(G12, '合法鸡蛋向全房间广播');
+    var t12_2 = register(G12, '未入桌订阅者不能发送');
+    var t12_3 = register(G12, '拒绝向自己扔道具');
+    var t12_4 = register(G12, '拒绝非法道具类型');
+    var t12_5 = register(G12, '拒绝不存在的目标');
+    var t12_6 = register(G12, '旧连接不能代表玩家发送');
+    var t12_7 = register(G12, '离开频道后不能发送');
+    var t12_8 = register(G12, '一秒内重复发送被限流');
+    var t12_9 = register(G12, '被移出房间后不能发送');
+    var t12_10 = register(G12, '房间删除后返回不存在');
+    var t12_11 = register(G12, '冷却结束后恢复发送');
+    var t12_12 = register(G12, '失败请求不消耗冷却');
+    var t12_13 = register(G12, '邀请订阅者入桌后可发送');
+    var t12_14 = register(G12, '互动不触发房间状态更新');
+    var t12_15 = register(G12, '可向房内离线玩家发送');
+    var t12_16 = register(G12, '结果阶段拒绝道具互动');
+    var t12_17 = register(G12, '被踢旧连接重入后仍失效');
+
     updateUI();
 
-    var A = '_test_A_' + Date.now();
-    var B = '_test_B_' + Date.now();
-    var C = '_test_C_' + Date.now();
-    var D = '_test_D_' + Date.now();
+    var runPrefix = "_test_" + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8) + '_';
+    var A = runPrefix + 'A_' + Date.now();
+    var B = runPrefix + 'B_' + Date.now();
+    var C = runPrefix + 'C_' + Date.now();
+    var D = runPrefix + 'D_' + Date.now();
     var roomId = '';
     var dealer = A;
+    var testSockets = [];
 
     function ms(t, fn) {
       t.status = 'running';
@@ -396,23 +531,32 @@
       var r8_4r = await ms(t8_4, function () { return post('deal', { playerId: dealer, roomId: roomId }); });
       check(t8_4, !r8_4r.ok && r8_4r.code === 'WRONG_STATUS', 'code=' + r8_4r.code);
 
-      var nd8 = getNonDealer([A, B, C], dealer);
-      await post('bet', { playerId: nd8[0], roomId: roomId, bet: 1 });
-      var r8_5r = await ms(t8_5, function () { return post('bet', { playerId: nd8[0], roomId: roomId, bet: 2 }); });
+      var repeatA = runPrefix + 'repeat_A_' + Date.now();
+      var repeatB = runPrefix + 'repeat_B_' + Date.now();
+      var repeatC = runPrefix + 'repeat_C_' + Date.now();
+      var repeatRoom = await post('createRoom', { playerId: repeatA, nickName: '重复A' });
+      await post('joinRoom', { playerId: repeatB, roomId: repeatRoom.roomId, nickName: '重复B' });
+      await post('joinRoom', { playerId: repeatC, roomId: repeatRoom.roomId, nickName: '重复C' });
+      await post('deal', { playerId: repeatA, roomId: repeatRoom.roomId });
+      await post('bet', { playerId: repeatB, roomId: repeatRoom.roomId, bet: 1 });
+      var r8_5r = await ms(t8_5, function () { return post('bet', { playerId: repeatB, roomId: repeatRoom.roomId, bet: 2 }); });
       check(t8_5, !r8_5r.ok && r8_5r.code === 'ALREADY_BET', 'code=' + r8_5r.code);
 
+      var currentRoom8 = await post('getRoom', { playerId: dealer, roomId: roomId });
+      var currentIds8 = currentRoom8.ok ? currentRoom8.room.players.map(function (p) { return p.openId; }) : [A, B, C];
+      var nd8 = getNonDealer(currentIds8, dealer);
       var r8_6r = await ms(t8_6, function () { return post('open', { playerId: nd8[0], roomId: roomId, mode: 'openAll' }); });
       check(t8_6, !r8_6r.ok && r8_6r.code === 'NOT_DEALER', 'code=' + r8_6r.code);
 
-      for (var i8 = 1; i8 < nd8.length; i8++) await post('bet', { playerId: nd8[i8], roomId: roomId, bet: 1 });
+      for (var i8 = 0; i8 < nd8.length; i8++) await post('bet', { playerId: nd8[i8], roomId: roomId, bet: 1 });
       await post('open', { playerId: dealer, roomId: roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
       var rGetRoom2 = await post('getRoom', { playerId: dealer, roomId: roomId });
       if (rGetRoom2.ok) dealer = rGetRoom2.room.dealerOpenId;
       await post('resetRound', { playerId: dealer, roomId: roomId });
 
       // =============== G9: 牌组管理 ===============
-      var X1 = '_test_X1_' + Date.now();
-      var X2 = '_test_X2_' + Date.now();
+      var X1 = runPrefix + 'X1_' + Date.now();
+      var X2 = runPrefix + 'X2_' + Date.now();
       var rx = await post('createRoom', { playerId: X1, nickName: 'X1' });
       var rid2 = rx.roomId;
       await post('joinRoom', { playerId: X2, roomId: rid2, nickName: 'X2' });
@@ -448,9 +592,459 @@
       var s10_5 = await ms(t10_5, function () { return httpGet('/test-runner.js'); });
       check(t10_5, s10_5 === 200, 'status=' + s10_5);
 
+      var s10_6 = await ms(t10_6, function () { return httpGet('/assets/props/egg-projectile.webp'); });
+      check(t10_6, s10_6 === 200, 'status=' + s10_6);
+      var s10_7 = await ms(t10_7, function () { return httpGet('/assets/props/egg-impact.webp'); });
+      check(t10_7, s10_7 === 200, 'status=' + s10_7);
+      var s10_8 = await ms(t10_8, function () { return httpGet('/assets/props/egg-splat.webp'); });
+      check(t10_8, s10_8 === 200, 'status=' + s10_8);
+      var s10_9 = await ms(t10_9, function () { return httpGet('/assets/props/tomato-projectile.webp'); });
+      check(t10_9, s10_9 === 200, 'status=' + s10_9);
+      var s10_10 = await ms(t10_10, function () { return httpGet('/assets/props/tomato-impact.webp'); });
+      check(t10_10, s10_10 === 200, 'status=' + s10_10);
+      var s10_11 = await ms(t10_11, function () { return httpGet('/assets/props/tomato-splat.webp'); });
+      check(t10_11, s10_11 === 200, 'status=' + s10_11);
+
       // =============== G11: Socket.IO ===============
       var s11 = await ms(t11_1, function () { return httpGet('/socket.io/socket.io.js'); });
       check(t11_1, s11 === 200, 'status=' + s11);
+
+      // =============== G12: 玩家道具互动 ===============
+      try {
+        var propResult = await ms(t12_1, async function () {
+          var PA = runPrefix + 'prop_A_' + Date.now();
+          var PB = runPrefix + 'prop_B_' + Date.now();
+          var created = await post('createRoom', { playerId: PA, nickName: '道具A' });
+          await post('joinRoom', { playerId: PB, roomId: created.roomId, nickName: '道具B' });
+
+          var socketA = await connectTestSocket();
+          var socketB = await connectTestSocket();
+          testSockets.push(socketA, socketB);
+          await Promise.all([
+            emitArgsWithAck(socketA, 'joinRoom', [created.roomId, PA]),
+            emitArgsWithAck(socketB, 'joinRoom', [created.roomId, PB])
+          ]);
+
+          var matchesThrow = function (data) {
+            return data && data.roomId === created.roomId &&
+              data.senderPlayerId === PA && data.targetPlayerId === PB && data.propType === 'egg';
+          };
+          var eventA = waitForEvent(socketA, 'propThrown', matchesThrow);
+          var eventB = waitForEvent(socketB, 'propThrown', matchesThrow);
+          var ack = emitWithAck(socketA, 'throwProp', {
+            roomId: created.roomId,
+            targetPlayerId: PB,
+            propType: 'egg'
+          });
+
+          var values = await Promise.all([ack, eventA, eventB]);
+          return { ack: values[0], eventA: values[1], eventB: values[2] };
+        });
+        check(t12_1, propResult.ack && propResult.ack.ok && propResult.eventA && propResult.eventB,
+          'resp=' + brief(propResult));
+      } catch (propErr) {
+        check(t12_1, false, propErr.message || String(propErr));
+      }
+
+      try {
+        var visitorAck = await ms(t12_2, async function () {
+          var ownerId = runPrefix + 'prop_owner_' + Date.now();
+          var visitorId = runPrefix + 'prop_visitor_' + Date.now();
+          var created = await post('createRoom', { playerId: ownerId, nickName: '房主' });
+          var visitorSocket = await connectTestSocket();
+          testSockets.push(visitorSocket);
+          await emitArgsWithAck(visitorSocket, 'joinRoom', [created.roomId, visitorId]);
+          return emitWithAck(visitorSocket, 'throwProp', {
+            roomId: created.roomId,
+            targetPlayerId: ownerId,
+            propType: 'egg'
+          });
+        });
+        check(t12_2, visitorAck && !visitorAck.ok && visitorAck.code === 'SENDER_NOT_IN_ROOM',
+          'resp=' + brief(visitorAck));
+      } catch (visitorErr) {
+        check(t12_2, false, visitorErr.message || String(visitorErr));
+      }
+
+      try {
+        var invalidA = runPrefix + 'prop_invalid_A_' + Date.now();
+        var invalidB = runPrefix + 'prop_invalid_B_' + Date.now();
+        var invalidRoom = await post('createRoom', { playerId: invalidA, nickName: '校验A' });
+        await post('joinRoom', { playerId: invalidB, roomId: invalidRoom.roomId, nickName: '校验B' });
+        var invalidSocket = await connectTestSocket();
+        testSockets.push(invalidSocket);
+        await emitArgsWithAck(invalidSocket, 'joinRoom', [invalidRoom.roomId, invalidA]);
+
+        var selfAck = await ms(t12_3, function () {
+          return emitWithAck(invalidSocket, 'throwProp', {
+            roomId: invalidRoom.roomId,
+            targetPlayerId: invalidA,
+            propType: 'egg'
+          });
+        });
+        check(t12_3, selfAck && !selfAck.ok && selfAck.code === 'CANNOT_TARGET_SELF',
+          'resp=' + brief(selfAck));
+
+        var typeAck = await ms(t12_4, function () {
+          return emitWithAck(invalidSocket, 'throwProp', {
+            roomId: invalidRoom.roomId,
+            targetPlayerId: invalidB,
+            propType: 'watermelon'
+          });
+        });
+        check(t12_4, typeAck && !typeAck.ok && typeAck.code === 'INVALID_PROP',
+          'resp=' + brief(typeAck));
+
+        var targetAck = await ms(t12_5, function () {
+          return emitWithAck(invalidSocket, 'throwProp', {
+            roomId: invalidRoom.roomId,
+            targetPlayerId: runPrefix + 'missing_player',
+            propType: 'tomato'
+          });
+        });
+        check(t12_5, targetAck && !targetAck.ok && targetAck.code === 'TARGET_NOT_FOUND',
+          'resp=' + brief(targetAck));
+      } catch (invalidErr) {
+        if (t12_3.status !== 'pass' && t12_3.status !== 'fail') check(t12_3, false, invalidErr.message || String(invalidErr));
+        if (t12_4.status !== 'pass' && t12_4.status !== 'fail') check(t12_4, false, invalidErr.message || String(invalidErr));
+        if (t12_5.status !== 'pass' && t12_5.status !== 'fail') check(t12_5, false, invalidErr.message || String(invalidErr));
+      }
+
+      try {
+        var staleA = runPrefix + 'prop_stale_A_' + Date.now();
+        var staleB = runPrefix + 'prop_stale_B_' + Date.now();
+        var staleRoom = await post('createRoom', { playerId: staleA, nickName: '旧连接A' });
+        await post('joinRoom', { playerId: staleB, roomId: staleRoom.roomId, nickName: '目标B' });
+        var oldSocket = await connectTestSocket();
+        var newSocket = await connectTestSocket();
+        testSockets.push(oldSocket, newSocket);
+        await emitArgsWithAck(oldSocket, 'joinRoom', [staleRoom.roomId, staleA]);
+        await emitArgsWithAck(newSocket, 'joinRoom', [staleRoom.roomId, staleA]);
+        await emitWithAck(newSocket, 'throwProp', {
+          roomId: staleRoom.roomId,
+          targetPlayerId: staleA,
+          propType: 'egg'
+        });
+
+        var staleAck = await ms(t12_6, function () {
+          return emitWithAck(oldSocket, 'throwProp', {
+            roomId: staleRoom.roomId,
+            targetPlayerId: staleB,
+            propType: 'egg'
+          });
+        });
+        check(t12_6, staleAck && !staleAck.ok && staleAck.code === 'STALE_SOCKET',
+          'resp=' + brief(staleAck));
+      } catch (staleErr) {
+        check(t12_6, false, staleErr.message || String(staleErr));
+      }
+
+      try {
+        var leaveA = runPrefix + 'prop_leave_A_' + Date.now();
+        var leaveB = runPrefix + 'prop_leave_B_' + Date.now();
+        var leaveRoom = await post('createRoom', { playerId: leaveA, nickName: '离开A' });
+        await post('joinRoom', { playerId: leaveB, roomId: leaveRoom.roomId, nickName: '目标B' });
+        var leaveSocket = await connectTestSocket();
+        testSockets.push(leaveSocket);
+        await emitArgsWithAck(leaveSocket, 'joinRoom', [leaveRoom.roomId, leaveA]);
+        await emitArgsWithAck(leaveSocket, 'leaveRoom', [leaveRoom.roomId]);
+
+        var leaveAck = await ms(t12_7, function () {
+          return emitWithAck(leaveSocket, 'throwProp', {
+            roomId: leaveRoom.roomId,
+            targetPlayerId: leaveB,
+            propType: 'tomato'
+          });
+        });
+        check(t12_7, leaveAck && !leaveAck.ok && leaveAck.code === 'SENDER_NOT_IN_ROOM',
+          'resp=' + brief(leaveAck));
+      } catch (leaveErr) {
+        check(t12_7, false, leaveErr.message || String(leaveErr));
+      }
+
+      try {
+        var rateA = runPrefix + 'prop_rate_A_' + Date.now();
+        var rateB = runPrefix + 'prop_rate_B_' + Date.now();
+        var rateRoom = await post('createRoom', { playerId: rateA, nickName: '限流A' });
+        await post('joinRoom', { playerId: rateB, roomId: rateRoom.roomId, nickName: '目标B' });
+        var rateSocket = await connectTestSocket();
+        testSockets.push(rateSocket);
+        await emitArgsWithAck(rateSocket, 'joinRoom', [rateRoom.roomId, rateA]);
+
+        var firstAck = await emitWithAck(rateSocket, 'throwProp', {
+          roomId: rateRoom.roomId,
+          targetPlayerId: rateB,
+          propType: 'egg'
+        });
+        var secondAck = await ms(t12_8, function () {
+          return emitWithAck(rateSocket, 'throwProp', {
+            roomId: rateRoom.roomId,
+            targetPlayerId: rateB,
+            propType: 'tomato'
+          });
+        });
+        check(t12_8, firstAck && firstAck.ok && secondAck && !secondAck.ok && secondAck.code === 'RATE_LIMITED',
+          'first=' + brief(firstAck) + ' second=' + brief(secondAck));
+      } catch (rateErr) {
+        check(t12_8, false, rateErr.message || String(rateErr));
+      }
+
+      try {
+        var kickOwner = runPrefix + 'prop_kick_owner_' + Date.now();
+        var kickedSender = runPrefix + 'prop_kicked_' + Date.now();
+        var kickRoom = await post('createRoom', { playerId: kickOwner, nickName: '房主' });
+        await post('joinRoom', { playerId: kickedSender, roomId: kickRoom.roomId, nickName: '被移出者' });
+        var kickedSocket = await connectTestSocket();
+        testSockets.push(kickedSocket);
+        await emitArgsWithAck(kickedSocket, 'joinRoom', [kickRoom.roomId, kickedSender]);
+        await post('kickPlayer', {
+          playerId: kickOwner,
+          roomId: kickRoom.roomId,
+          targetPlayerId: kickedSender
+        });
+
+        var kickedAck = await ms(t12_9, function () {
+          return emitWithAck(kickedSocket, 'throwProp', {
+            roomId: kickRoom.roomId,
+            targetPlayerId: kickOwner,
+            propType: 'egg'
+          });
+        });
+        check(t12_9, kickedAck && !kickedAck.ok && kickedAck.code === 'SENDER_NOT_IN_ROOM',
+          'resp=' + brief(kickedAck));
+
+        await post('joinRoom', { playerId: kickedSender, roomId: kickRoom.roomId, nickName: '重新加入者' });
+        var rejoinedOldAck = await ms(t12_17, function () {
+          return emitWithAck(kickedSocket, 'throwProp', {
+            roomId: kickRoom.roomId,
+            targetPlayerId: kickOwner,
+            propType: 'tomato'
+          });
+        });
+        check(t12_17, rejoinedOldAck && !rejoinedOldAck.ok &&
+          (rejoinedOldAck.code === 'STALE_SOCKET' || rejoinedOldAck.code === 'SENDER_NOT_IN_ROOM'),
+          'resp=' + brief(rejoinedOldAck));
+      } catch (kickedErr) {
+        if (t12_9.status !== 'pass' && t12_9.status !== 'fail') check(t12_9, false, kickedErr.message || String(kickedErr));
+        if (t12_17.status !== 'pass' && t12_17.status !== 'fail') check(t12_17, false, kickedErr.message || String(kickedErr));
+      }
+
+      try {
+        var recoveryA = runPrefix + 'prop_recovery_A_' + Date.now();
+        var recoveryB = runPrefix + 'prop_recovery_B_' + Date.now();
+        var recoveryRoom = await post('createRoom', { playerId: recoveryA, nickName: '恢复A' });
+        await post('joinRoom', { playerId: recoveryB, roomId: recoveryRoom.roomId, nickName: '目标B' });
+        var recoverySocket = await connectTestSocket();
+        testSockets.push(recoverySocket);
+        await emitArgsWithAck(recoverySocket, 'joinRoom', [recoveryRoom.roomId, recoveryA]);
+        var recoveryFirst = await emitWithAck(recoverySocket, 'throwProp', {
+          roomId: recoveryRoom.roomId,
+          targetPlayerId: recoveryB,
+          propType: 'egg'
+        });
+        await delay(1050);
+        var recoverySecond = await ms(t12_11, function () {
+          return emitWithAck(recoverySocket, 'throwProp', {
+            roomId: recoveryRoom.roomId,
+            targetPlayerId: recoveryB,
+            propType: 'tomato'
+          });
+        });
+        check(t12_11, recoveryFirst && recoveryFirst.ok && recoverySecond && recoverySecond.ok,
+          'first=' + brief(recoveryFirst) + ' second=' + brief(recoverySecond));
+      } catch (recoveryErr) {
+        check(t12_11, false, recoveryErr.message || String(recoveryErr));
+      }
+
+      try {
+        var noCostA = runPrefix + 'prop_no_cost_A_' + Date.now();
+        var noCostB = runPrefix + 'prop_no_cost_B_' + Date.now();
+        var noCostRoom = await post('createRoom', { playerId: noCostA, nickName: '失败A' });
+        await post('joinRoom', { playerId: noCostB, roomId: noCostRoom.roomId, nickName: '目标B' });
+        var noCostSocket = await connectTestSocket();
+        testSockets.push(noCostSocket);
+        await emitArgsWithAck(noCostSocket, 'joinRoom', [noCostRoom.roomId, noCostA]);
+        var rejectedAck = await emitWithAck(noCostSocket, 'throwProp', {
+          roomId: noCostRoom.roomId,
+          targetPlayerId: noCostA,
+          propType: 'egg'
+        });
+        var acceptedAck = await ms(t12_12, function () {
+          return emitWithAck(noCostSocket, 'throwProp', {
+            roomId: noCostRoom.roomId,
+            targetPlayerId: noCostB,
+            propType: 'egg'
+          });
+        });
+        check(t12_12, rejectedAck && !rejectedAck.ok && rejectedAck.code === 'CANNOT_TARGET_SELF' &&
+          acceptedAck && acceptedAck.ok,
+          'rejected=' + brief(rejectedAck) + ' accepted=' + brief(acceptedAck));
+      } catch (noCostErr) {
+        check(t12_12, false, noCostErr.message || String(noCostErr));
+      }
+
+      try {
+        var inviteA = runPrefix + 'prop_invite_A_' + Date.now();
+        var inviteB = runPrefix + 'prop_invite_B_' + Date.now();
+        var inviteVisitor = runPrefix + 'prop_invite_visitor_' + Date.now();
+        var inviteRoom = await post('createRoom', { playerId: inviteA, nickName: '邀请A' });
+        await post('joinRoom', { playerId: inviteB, roomId: inviteRoom.roomId, nickName: '目标B' });
+        var inviteSenderSocket = await connectTestSocket();
+        var inviteVisitorSocket = await connectTestSocket();
+        testSockets.push(inviteSenderSocket, inviteVisitorSocket);
+        await Promise.all([
+          emitArgsWithAck(inviteSenderSocket, 'joinRoom', [inviteRoom.roomId, inviteA]),
+          emitArgsWithAck(inviteVisitorSocket, 'joinRoom', [inviteRoom.roomId, inviteVisitor])
+        ]);
+        var inviteEventPromise = waitForEvent(inviteVisitorSocket, 'propThrown', function (data) {
+          return data && data.senderPlayerId === inviteA && data.targetPlayerId === inviteB;
+        });
+        var inviteThrowAck = emitWithAck(inviteSenderSocket, 'throwProp', {
+          roomId: inviteRoom.roomId,
+          targetPlayerId: inviteB,
+          propType: 'egg'
+        });
+        var inviteValues = await Promise.all([inviteEventPromise, inviteThrowAck]);
+        await post('joinRoom', {
+          playerId: inviteVisitor,
+          roomId: inviteRoom.roomId,
+          nickName: '邀请访客'
+        });
+        await emitArgsWithAck(inviteVisitorSocket, 'joinRoom', [inviteRoom.roomId, inviteVisitor]);
+        var inviteSyncAck = await emitWithAck(inviteVisitorSocket, 'throwProp', {
+          roomId: inviteRoom.roomId,
+          targetPlayerId: inviteVisitor,
+          propType: 'egg'
+        });
+        var inviteMemberAck = await ms(t12_13, function () {
+          return emitWithAck(inviteVisitorSocket, 'throwProp', {
+            roomId: inviteRoom.roomId,
+            targetPlayerId: inviteB,
+            propType: 'tomato'
+          });
+        });
+        check(t12_13, inviteValues[0] && inviteValues[1] && inviteValues[1].ok &&
+          inviteSyncAck && !inviteSyncAck.ok && inviteSyncAck.code === 'CANNOT_TARGET_SELF' &&
+          inviteMemberAck && inviteMemberAck.ok,
+          'subscribe=' + brief(inviteValues) + ' member=' + brief(inviteMemberAck));
+      } catch (inviteErr) {
+        check(t12_13, false, inviteErr.message || String(inviteErr));
+      }
+
+      try {
+        var pureA = runPrefix + 'prop_pure_A_' + Date.now();
+        var pureB = runPrefix + 'prop_pure_B_' + Date.now();
+        var pureRoom = await post('createRoom', { playerId: pureA, nickName: '纯事件A' });
+        await post('joinRoom', { playerId: pureB, roomId: pureRoom.roomId, nickName: '纯事件B' });
+        var pureSocket = await connectTestSocket();
+        testSockets.push(pureSocket);
+        await emitArgsWithAck(pureSocket, 'joinRoom', [pureRoom.roomId, pureA]);
+        var beforeRoom = await post('getRoom', { playerId: pureA, roomId: pureRoom.roomId });
+        var noUpdatePromise = expectNoEvent(pureSocket, 'roomUpdate', function (data) {
+          return data && data.roomId === pureRoom.roomId;
+        }, 250);
+        var pureEventPromise = waitForEvent(pureSocket, 'propThrown', function (data) {
+          return data && data.roomId === pureRoom.roomId;
+        });
+        var pureAckPromise = emitWithAck(pureSocket, 'throwProp', {
+          roomId: pureRoom.roomId,
+          targetPlayerId: pureB,
+          propType: 'egg'
+        });
+        var pureValues = await Promise.all([pureAckPromise, pureEventPromise, noUpdatePromise]);
+        var afterRoom = await post('getRoom', { playerId: pureA, roomId: pureRoom.roomId });
+        var sameState = JSON.stringify(roomStateSnapshot(beforeRoom.room)) === JSON.stringify(roomStateSnapshot(afterRoom.room));
+        check(t12_14, pureValues[0] && pureValues[0].ok && pureValues[1] && pureValues[2] === true && sameState,
+          'ack=' + brief(pureValues[0]) + ' noRoomUpdate=' + pureValues[2] + ' sameState=' + sameState);
+      } catch (pureErr) {
+        check(t12_14, false, pureErr.message || String(pureErr));
+      }
+
+      try {
+        var offlineA = runPrefix + 'prop_offline_A_' + Date.now();
+        var offlineB = runPrefix + 'prop_offline_B_' + Date.now();
+        var offlineC = runPrefix + 'prop_offline_C_' + Date.now();
+        var offlineRoom = await post('createRoom', { playerId: offlineA, nickName: '在线A' });
+        await post('joinRoom', { playerId: offlineB, roomId: offlineRoom.roomId, nickName: '离线B' });
+        await post('joinRoom', { playerId: offlineC, roomId: offlineRoom.roomId, nickName: '旁观C' });
+        var offlineSenderSocket = await connectTestSocket();
+        var offlineTargetSocket = await connectTestSocket();
+        var offlineObserverSocket = await connectTestSocket();
+        testSockets.push(offlineSenderSocket, offlineTargetSocket, offlineObserverSocket);
+        await Promise.all([
+          emitArgsWithAck(offlineSenderSocket, 'joinRoom', [offlineRoom.roomId, offlineA]),
+          emitArgsWithAck(offlineTargetSocket, 'joinRoom', [offlineRoom.roomId, offlineB]),
+          emitArgsWithAck(offlineObserverSocket, 'joinRoom', [offlineRoom.roomId, offlineC])
+        ]);
+        var offlineUpdatePromise = waitForEvent(offlineSenderSocket, 'roomUpdate', function (room) {
+          var target = room && room.players && room.players.find(function (p) { return p.openId === offlineB; });
+          return target && target.offline === true;
+        });
+        offlineTargetSocket.disconnect();
+        var offlineUpdate = await offlineUpdatePromise;
+        var offlineEventPromise = waitForEvent(offlineObserverSocket, 'propThrown', function (data) {
+          return data && data.targetPlayerId === offlineB;
+        });
+        var offlineAckPromise = emitWithAck(offlineSenderSocket, 'throwProp', {
+          roomId: offlineRoom.roomId,
+          targetPlayerId: offlineB,
+          propType: 'tomato'
+        });
+        var offlineValues = await Promise.all([offlineAckPromise, offlineEventPromise]);
+        check(t12_15, offlineUpdate && offlineValues[0] && offlineValues[0].ok && offlineValues[1],
+          'ack=' + brief(offlineValues[0]) + ' event=' + brief(offlineValues[1]));
+      } catch (offlineErr) {
+        check(t12_15, false, offlineErr.message || String(offlineErr));
+      }
+
+      try {
+        var openedA = runPrefix + 'prop_opened_A_' + Date.now();
+        var openedB = runPrefix + 'prop_opened_B_' + Date.now();
+        var openedRoom = await post('createRoom', { playerId: openedA, nickName: '结果A' });
+        await post('joinRoom', { playerId: openedB, roomId: openedRoom.roomId, nickName: '结果B' });
+        var openedSocket = await connectTestSocket();
+        testSockets.push(openedSocket);
+        await emitArgsWithAck(openedSocket, 'joinRoom', [openedRoom.roomId, openedA]);
+        await post('deal', { playerId: openedA, roomId: openedRoom.roomId });
+        await post('bet', { playerId: openedB, roomId: openedRoom.roomId, bet: 1 });
+        await post('open', { playerId: openedA, roomId: openedRoom.roomId, mode: 'openAllNoPass', selectedOpenIds: [] });
+
+        var openedAck = await ms(t12_16, function () {
+          return emitWithAck(openedSocket, 'throwProp', {
+            roomId: openedRoom.roomId,
+            targetPlayerId: openedB,
+            propType: 'egg'
+          });
+        });
+        check(t12_16, openedAck && !openedAck.ok && openedAck.code === 'WRONG_STATUS',
+          'resp=' + brief(openedAck));
+      } catch (openedErr) {
+        check(t12_16, false, openedErr.message || String(openedErr));
+      }
+
+      try {
+        var goneA = runPrefix + 'prop_gone_A_' + Date.now();
+        var goneB = runPrefix + 'prop_gone_B_' + Date.now();
+        var goneRoom = await post('createRoom', { playerId: goneA, nickName: '删除A' });
+        await post('joinRoom', { playerId: goneB, roomId: goneRoom.roomId, nickName: '删除B' });
+        var goneSocket = await connectTestSocket();
+        testSockets.push(goneSocket);
+        await emitArgsWithAck(goneSocket, 'joinRoom', [goneRoom.roomId, goneA]);
+        var cleanResult = await post('_cleanTestRooms', { key: testKey, ownerPrefix: runPrefix });
+
+        var goneAck = await ms(t12_10, function () {
+          return emitWithAck(goneSocket, 'throwProp', {
+            roomId: goneRoom.roomId,
+            targetPlayerId: goneB,
+            propType: 'tomato'
+          });
+        });
+        check(t12_10, cleanResult && cleanResult.ok && cleanResult.cleaned > 0 &&
+          goneAck && !goneAck.ok && goneAck.code === 'ROOM_NOT_FOUND',
+          'clean=' + brief(cleanResult) + ' resp=' + brief(goneAck));
+      } catch (goneErr) {
+        check(t12_10, false, goneErr.message || String(goneErr));
+      }
 
     } catch (err) {
       var errTest = register('ERROR', '测试运行异常');
@@ -459,8 +1053,12 @@
       failed++;
     }
 
+    testSockets.forEach(function (socket) {
+      if (socket && socket.connected) socket.disconnect();
+    });
+
     try {
-      await post('_cleanTestRooms', { key: testKey });
+      await post('_cleanTestRooms', { key: testKey, ownerPrefix: runPrefix });
     } catch (e) { /* ignore */ }
 
     updateUI();

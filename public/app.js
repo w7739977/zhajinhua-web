@@ -126,6 +126,32 @@
 
   var socket = null;
   var currentSocketRoom = null;
+  var propMenuLayer = null;
+  var propMenuTargetId = null;
+  var activePropNodes = [];
+  var activePropAnimations = [];
+
+  var PROP_ASSETS = {
+    egg: {
+      projectile: '/assets/props/egg-projectile.webp',
+      impact: '/assets/props/egg-impact.webp',
+      splat: '/assets/props/egg-splat.webp'
+    },
+    tomato: {
+      projectile: '/assets/props/tomato-projectile.webp',
+      impact: '/assets/props/tomato-impact.webp',
+      splat: '/assets/props/tomato-splat.webp'
+    }
+  };
+
+  function preloadPropAssets() {
+    Object.keys(PROP_ASSETS).forEach(function (propType) {
+      Object.keys(PROP_ASSETS[propType]).forEach(function (phase) {
+        var image = new Image();
+        image.src = PROP_ASSETS[propType][phase];
+      });
+    });
+  }
 
   function initSocket() {
     if (socket) return;
@@ -135,6 +161,10 @@
       if (state.currentPage === 'room' && room.roomId === state.roomId) {
         updateRoomView(room);
       }
+    });
+
+    socket.on('propThrown', function (data) {
+      playPropThrown(data);
     });
 
     socket.on('roundReset', function (data) {
@@ -178,6 +208,181 @@
     currentSocketRoom = null;
   }
 
+  function isPropInteractionAvailable() {
+    return state.currentPage === 'room' &&
+      (state.status === 'waiting' || state.status === 'betting' || state.status === 'opening');
+  }
+
+  function getRoomAvatar(playerId) {
+    var avatars = document.querySelectorAll('.room-page .avatar-wrap[data-player-id]');
+    for (var i = 0; i < avatars.length; i++) {
+      if (avatars[i].getAttribute('data-player-id') === playerId) return avatars[i];
+    }
+    return null;
+  }
+
+  function getAvatarCenter(playerId) {
+    var avatar = getRoomAvatar(playerId);
+    if (!avatar) return null;
+    var rect = avatar.getBoundingClientRect();
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+      element: avatar
+    };
+  }
+
+  function closePropMenu() {
+    if (propMenuLayer && propMenuLayer.parentNode) propMenuLayer.parentNode.removeChild(propMenuLayer);
+    propMenuLayer = null;
+    propMenuTargetId = null;
+  }
+
+  function trackPropNode(node) {
+    activePropNodes.push(node);
+    return node;
+  }
+
+  function removePropNode(node) {
+    var index = activePropNodes.indexOf(node);
+    if (index >= 0) activePropNodes.splice(index, 1);
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+  }
+
+  function trackPropAnimation(animation) {
+    activePropAnimations.push(animation);
+    function untrack() {
+      var index = activePropAnimations.indexOf(animation);
+      if (index >= 0) activePropAnimations.splice(index, 1);
+    }
+    animation.finished.then(untrack, untrack);
+    return animation;
+  }
+
+  function runPropAnimation(element, keyframes, options) {
+    if (element && typeof element.animate === 'function') {
+      return trackPropAnimation(element.animate(keyframes, options));
+    }
+
+    var timer = null;
+    var rejectFinished = null;
+    var finished = new Promise(function (resolve, reject) {
+      rejectFinished = reject;
+      timer = setTimeout(resolve, (options && options.duration) || 0);
+    });
+    return trackPropAnimation({
+      finished: finished,
+      cancel: function () {
+        if (timer == null) return;
+        clearTimeout(timer);
+        timer = null;
+        rejectFinished(new Error('animation cancelled'));
+      }
+    });
+  }
+
+  function clearPropAnimations() {
+    activePropAnimations.slice().forEach(function (animation) {
+      try { animation.cancel(); } catch (e) { /* ignore */ }
+    });
+    activePropAnimations = [];
+    activePropNodes.slice().forEach(removePropNode);
+    activePropNodes = [];
+  }
+
+  function createPropImage(src, className, size, center) {
+    var image = document.createElement('img');
+    image.src = src;
+    image.alt = '';
+    image.draggable = false;
+    image.className = className;
+    image.style.width = size + 'px';
+    image.style.height = size + 'px';
+    image.style.left = (center.x - size / 2) + 'px';
+    image.style.top = (center.y - size / 2) + 'px';
+    document.body.appendChild(image);
+    return trackPropNode(image);
+  }
+
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  async function playPropImpact(propType, targetPlayerId, reducedMotion) {
+    var assets = PROP_ASSETS[propType];
+    var target = getAvatarCenter(targetPlayerId);
+    if (!assets || !target || state.currentPage !== 'room' || state.status === 'opened') return;
+
+    var impact = createPropImage(assets.impact, 'prop-effect prop-impact', 82, target);
+    var impactAnimation = runPropAnimation(impact, [
+      { transform: 'scale(0.35) rotate(-12deg)', opacity: 0 },
+      { transform: 'scale(1.18) rotate(5deg)', opacity: 1, offset: 0.7 },
+      { transform: 'scale(1)', opacity: 0.92 }
+    ], { duration: reducedMotion ? 170 : 220, easing: 'cubic-bezier(.2,.85,.35,1)', fill: 'forwards' });
+
+    if (!reducedMotion && target.element && target.element.animate) {
+      trackPropAnimation(target.element.animate([
+        { transform: 'translateX(0) scale(1)' },
+        { transform: 'translateX(-4px) scale(.9)' },
+        { transform: 'translateX(4px) scale(.96)' },
+        { transform: 'translateX(-2px) scale(1)' },
+        { transform: 'translateX(0) scale(1)' }
+      ], { duration: 180, easing: 'ease-out' }));
+    }
+
+    try { await impactAnimation.finished; } catch (e) { removePropNode(impact); return; }
+    removePropNode(impact);
+
+    target = getAvatarCenter(targetPlayerId);
+    if (!target || state.currentPage !== 'room' || state.status === 'opened') return;
+    var splat = createPropImage(assets.splat, 'prop-effect prop-splat', 86, target);
+    var splatAnimation = runPropAnimation(splat, [
+      { transform: 'scale(.68)', opacity: 0 },
+      { transform: 'scale(1)', opacity: 0.96, offset: 0.25 },
+      { transform: 'scale(1.05)', opacity: 0 }
+    ], { duration: reducedMotion ? 260 : 440, easing: 'ease-out', fill: 'forwards' });
+    try { await splatAnimation.finished; } catch (e) { /* cancelled */ }
+    removePropNode(splat);
+  }
+
+  async function playPropThrown(data) {
+    if (!data || !PROP_ASSETS[data.propType]) return;
+    if (!isPropInteractionAvailable() || data.roomId !== state.roomId) return;
+    if (!data.senderPlayerId || !data.targetPlayerId || data.senderPlayerId === data.targetPlayerId) return;
+
+    var start = getAvatarCenter(data.senderPlayerId);
+    var end = getAvatarCenter(data.targetPlayerId);
+    if (!start || !end) return;
+
+    var reducedMotion = prefersReducedMotion();
+    if (reducedMotion) {
+      playPropImpact(data.propType, data.targetPlayerId, true);
+      return;
+    }
+
+    var projectileSize = 46;
+    var projectile = createPropImage(PROP_ASSETS[data.propType].projectile, 'prop-effect prop-projectile', projectileSize, start);
+    if (typeof projectile.animate !== 'function') {
+      removePropNode(projectile);
+      playPropImpact(data.propType, data.targetPlayerId, true);
+      return;
+    }
+    var dx = end.x - start.x;
+    var dy = end.y - start.y;
+    var distance = Math.sqrt(dx * dx + dy * dy);
+    var arc = Math.max(68, Math.min(130, distance * 0.28));
+    var projectileAnimation = runPropAnimation(projectile, [
+      { transform: 'translate3d(0,0,0) scale(.72) rotate(-18deg)', opacity: 0.85 },
+      { transform: 'translate3d(0,0,0) scale(1.08) rotate(8deg)', opacity: 1, offset: 0.12 },
+      { transform: 'translate3d(' + (dx * 0.52) + 'px,' + (dy * 0.5 - arc) + 'px,0) scale(1) rotate(168deg)', opacity: 1, offset: 0.55 },
+      { transform: 'translate3d(' + dx + 'px,' + dy + 'px,0) scale(.9) rotate(340deg)', opacity: 1 }
+    ], { duration: 600, easing: 'cubic-bezier(.2,.72,.32,1)', fill: 'forwards' });
+
+    try { await projectileAnimation.finished; } catch (e) { removePropNode(projectile); return; }
+    removePropNode(projectile);
+    playPropImpact(data.propType, data.targetPlayerId, false);
+  }
+
   // ============================================================
   // Router (hash-based)
   // ============================================================
@@ -205,9 +410,12 @@
   function handleRoute() {
     var route = parseRoute();
     var prevPage = state.currentPage;
+    var prevRoomId = state.roomId;
     state.currentPage = route.page;
 
-    if (prevPage === 'room' && route.page !== 'room') {
+    if (prevPage === 'room' && (route.page !== 'room' || route.roomId !== prevRoomId)) {
+      closePropMenu();
+      clearPropAnimations();
       leaveSocketRoom();
     }
 
@@ -361,7 +569,9 @@
   }
 
   function fetchRoom() {
-    api('getRoom', { roomId: state.roomId }).then(function (result) {
+    var requestedRoomId = state.roomId;
+    api('getRoom', { roomId: requestedRoomId }).then(function (result) {
+      if (state.currentPage !== 'room' || state.roomId !== requestedRoomId) return;
       if (!result.ok) {
         showToast(result.message || '房间不存在');
         navigate('/');
@@ -369,6 +579,7 @@
       }
       updateRoomView(result.room);
     }).catch(function () {
+      if (state.currentPage !== 'room' || state.roomId !== requestedRoomId) return;
       showToast('加载失败');
       navigate('/');
     });
@@ -381,6 +592,7 @@
 
   /** 邀请链接直达房间时：尚未 joinRoom API，不在 players 里，需先填昵称并加入 */
   function renderPendingJoin(room) {
+    closePropMenu();
     var rid = room.roomId || state.roomId;
     var html = '<div class="lobby-container pending-join-page">';
     html += '<div class="lobby-title">加入房间</div>';
@@ -404,6 +616,7 @@
   }
 
   App.joinRoomFromInvite = function () {
+    var joiningRoomId = state.roomId;
     var input = $('#invite-nickname-input');
     var nick = (input && input.value || '').trim();
     if (!nick) { showToast('请输入昵称'); return; }
@@ -412,11 +625,12 @@
 
     showLoading('加入中...');
     api('joinRoom', {
-      roomId: state.roomId,
+      roomId: joiningRoomId,
       nickName: nick,
       avatarUrl: ''
     }).then(function (result) {
       hideLoading();
+      if (state.currentPage !== 'room' || state.roomId !== joiningRoomId) return;
       if (!result.ok) {
         showToast(result.message || '加入失败');
         return;
@@ -424,9 +638,11 @@
       if (result.spectating) {
         showToast('游戏进行中，你将观战本局', 3000);
       }
+      joinSocketRoom(joiningRoomId);
       updateRoomView(result.room);
     }).catch(function () {
       hideLoading();
+      if (state.currentPage !== 'room' || state.roomId !== joiningRoomId) return;
       showToast('加入失败');
     });
   };
@@ -519,6 +735,7 @@
     if (status !== 'opened') state.isNavigatingToResult = false;
 
     if (status === 'opened' && !state.isNavigatingToResult) {
+      closePropMenu();
       state.isNavigatingToResult = true;
       state.roundResult = room.roundResult || null;
       state.roomPlayers = players;
@@ -565,7 +782,7 @@
 
     var html = '<div class="other-player-item ' + selectedClass + clickable + offlineClass + '"' + onclick + '>';
     html += '<div class="seat-base"></div>';
-    html += '<div class="avatar-wrap">';
+    html += '<div class="avatar-wrap prop-avatar-target" data-player-id="' + escHtml(p.openId) + '" role="button" aria-label="向' + escHtml(p.nickName || '玩家') + '扔道具" onclick="App.togglePropMenu(event,\'' + jsAttr(p.openId) + '\')">';
     html += renderAvatar(p.nickName, 36, avatarClass);
     if (p.isDealer) html += '<span class="crown-badge">👑</span>';
     if (p.offline) html += '<span class="offline-overlay"></span>';
@@ -581,6 +798,7 @@
   }
 
   function renderRoom() {
+    closePropMenu();
     var self = state.selfPlayer;
     var status = state.status;
     var isDealer = state.isDealer;
@@ -632,7 +850,7 @@
     if (self) {
       var selfAvatarClass = isDealer ? 'avatar-dealer' : (self.hasDealt ? 'avatar-dealt' : 'avatar-pending');
       html += '<div class="self-block"><div class="self-seat-base"></div>';
-      html += '<div class="avatar-wrap">';
+      html += '<div class="avatar-wrap" data-player-id="' + escHtml(self.openId) + '">';
       html += renderAvatar(self.nickName, 50, selfAvatarClass);
       if (isDealer) html += '<span class="crown-badge crown-badge-self">👑</span>';
       html += '</div>';
@@ -703,6 +921,96 @@
   }
 
   // Room actions
+
+  App.togglePropMenu = function (event, targetPlayerId) {
+    if (event) event.stopPropagation();
+    if (!isPropInteractionAvailable() || !targetPlayerId || targetPlayerId === state.playerId) return;
+    if (propMenuLayer && propMenuTargetId === targetPlayerId) {
+      closePropMenu();
+      return;
+    }
+
+    closePropMenu();
+    var avatar = getRoomAvatar(targetPlayerId);
+    if (!avatar) return;
+    var rect = avatar.getBoundingClientRect();
+
+    var layer = document.createElement('div');
+    layer.className = 'prop-menu-layer';
+    layer.onclick = function (e) {
+      if (e.target === layer) closePropMenu();
+    };
+
+    var menu = document.createElement('div');
+    menu.className = 'prop-menu';
+    menu.onclick = function (e) { e.stopPropagation(); };
+
+    function addButton(propType, label) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'prop-menu-button';
+      button.setAttribute('aria-label', label);
+      button.innerHTML = '<img src="' + PROP_ASSETS[propType].projectile + '" alt=""><span>' + label + '</span>';
+      button.onclick = function (e) {
+        e.stopPropagation();
+        App.sendProp(targetPlayerId, propType);
+      };
+      menu.appendChild(button);
+    }
+
+    addButton('egg', '鸡蛋');
+    addButton('tomato', '西红柿');
+    layer.appendChild(menu);
+    document.body.appendChild(layer);
+
+    var menuWidth = menu.offsetWidth;
+    var menuHeight = menu.offsetHeight;
+    var safe = 8;
+    var left = rect.left + rect.width / 2 - menuWidth / 2;
+    left = Math.max(safe, Math.min(window.innerWidth - menuWidth - safe, left));
+    var roomBelow = window.innerHeight - rect.bottom;
+    var opensUp = roomBelow < menuHeight + 86;
+    var top = opensUp ? rect.top - menuHeight - 10 : rect.bottom + 10;
+    top = Math.max(safe, Math.min(window.innerHeight - menuHeight - safe, top));
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+    if (opensUp) menu.classList.add('prop-menu--up');
+
+    propMenuLayer = layer;
+    propMenuTargetId = targetPlayerId;
+  };
+
+  App.sendProp = function (targetPlayerId, propType) {
+    closePropMenu();
+    if (!socket || !socket.connected) {
+      showToast('连接暂不可用');
+      return;
+    }
+
+    var sendingRoomId = state.roomId;
+    var settled = false;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      if (state.currentPage === 'room' && state.roomId === sendingRoomId) {
+        showToast('互动发送超时');
+      }
+    }, 1800);
+
+    socket.emit('throwProp', {
+      roomId: sendingRoomId,
+      targetPlayerId: targetPlayerId,
+      propType: propType
+    }, function (response) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (state.currentPage !== 'room' || state.roomId !== sendingRoomId) return;
+      if (!response || response.ok || response.code === 'RATE_LIMITED') return;
+      if (response.code === 'TARGET_NOT_FOUND') showToast('玩家已离开房间');
+      else if (response.code === 'STALE_SOCKET' || response.code === 'SENDER_NOT_IN_ROOM') showToast('连接已更新，请重试');
+    });
+  };
 
   App.invite = function () {
     var url = window.location.origin + '/#/room/' + state.roomId;
@@ -1082,6 +1390,7 @@
   // Init
   // ============================================================
 
+  preloadPropAssets();
   initSocket();
   window.addEventListener('hashchange', handleRoute);
   handleRoute();

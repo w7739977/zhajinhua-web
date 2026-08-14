@@ -21,6 +21,7 @@
 | `cloudfunctions/open/index.js` | `server.js` → `POST /api/open` | 开牌（含牌型引擎） |
 | `cloudfunctions/resetRound/index.js` | `server.js` → `POST /api/resetRound` | 新一局 |
 | — | `server.js` → `POST /api/kickPlayer` | 踢人（Web 独有）：仅房主，任意时刻可踢，踢中庄家自动迁移 |
+| — | `server.js` → Socket `throwProp` / `propThrown` | 鸡蛋/西红柿瞬时互动（Web 独有）：服务端身份校验、1 秒限流，不写房间状态 |
 | — | `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理（Web 独有，密钥保护） |
 
 > **改动规则**：修改任何云函数的业务逻辑时，必须同步修改 `server.js` 中对应的路由处理函数。
@@ -45,10 +46,10 @@
 
 | Web 版文件 | 说明 |
 |---|---|
-| `public/test-runner.js` | 部署后自动化测试运行器（44+ 用例，实时诊断） |
+| `public/test-runner.js` | 部署后自动化测试运行器（66 项用例，含真实 Socket 道具互动、限流与无状态副作用验证） |
 | `public/app.js` → `initTestPage()` / `renderTestPage()` | 测试页路由与 UI |
 | `public/style.css` → `.test-*` 样式 | 测试页面样式（进度条、通过/失败状态） |
-| `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理接口（TEST_KEY 密钥保护） |
+| `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理接口（TEST_KEY + 本次运行 ownerPrefix，避免并发互删） |
 
 > **访问方式**：`http://IP:端口/#/test?key=密钥`，密钥在 `server.js` 的 `TEST_KEY` 常量中配置。
 
@@ -136,9 +137,10 @@
 | 选择开牌保留手牌 | — | `resetRound` 保留未选中玩家 `card`，标记 `retainedCard` |
 | 庄家下一局广播 | — | `resetRound` 发送 `roundReset` 事件，全员自动返回房间 |
 | 过庄后整副洗牌 | — | `executeResetRound`：`roundResult.passDealer` 时 `shuffle(createDeck())` 并清空全员手牌；否则沿用 `deck`，不足则自动过庄洗牌 |
-| 邀请直链进房 | — | `/#/room/:id` → `getRoom` 后若 `playerId ∉ players` 则 `renderPendingJoin`；确认后 `joinRoom` 再 `updateRoomView`（避免只看不入桌） |
-| 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)`（Socket 频道，与 HTTP 入桌分离） |
-| 离开房间频道 | `watcher.close()` | `socket.emit('leaveRoom', roomId)` |
+| 邀请直链进房 | — | `/#/room/:id` → `getRoom` 后若 `playerId ∉ players` 则 `renderPendingJoin`；确认 HTTP `joinRoom` 后再次 `joinSocketRoom` 登记发送身份 |
+| 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)`；非成员可订阅，但只有 HTTP 已入桌玩家才登记可发送身份 |
+| 离开房间频道 | `watcher.close()` | `socket.emit('leaveRoom', roomId)`；`throwProp` 额外校验 Socket 仍在频道 |
+| 鸡蛋/西红柿互动 | — | 客户端 `throwProp` → 服务端校验成员/最新连接/1 秒冷却 → 房间广播 `propThrown`；不写 `room`、不触发 `roomUpdate` |
 
 > **改动规则**：如果修改了云函数中的数据库写入字段，Web 版 `broadcastRoom()` 调用的 `sanitizeRoom()` 也要同步返回该字段。
 > 修改小程序 `onShow` 恢复逻辑时，需同步修改 Web 版 `visibilitychange` 处理。
@@ -165,6 +167,7 @@
 | — | 庄家下一局 | `app.js` → `App.nextRound()` → `POST /api/resetRound` + `roundReset` 事件 |
 | — | 部署后自动化测试 | `app.js` → `initTestPage()` + `test-runner.js` → `TestRunner.run()` |
 | — | 邀请链接先入桌 | `app.js` → `playerInRoom()` / `renderPendingJoin()` / `App.joinRoomFromInvite()` / `App.backToLobbyFromInvite()` |
+| — | 玩家道具互动 | `app.js` → `App.togglePropMenu()` / `App.sendProp()` / `playPropThrown()` / `playPropImpact()`；`style.css` → `.prop-*` |
 
 ### 邀请链接进房（Web 独有流程说明）
 
@@ -235,6 +238,7 @@ CSS 类名两版保持一致，便于视觉联动调整：
 | 头像状态 | `.avatar-dealer`, `.avatar-dealt`, `.avatar-pending` |
 | 庄家标识 | `.crown-badge`, `.crown-badge-self` |
 | 选人高亮 | `.player-selected` |
+| 道具互动 | `.prop-avatar-target`, `.prop-menu-*`, `.prop-projectile`, `.prop-impact`, `.prop-splat` |
 | 下注筹码 | `.bet-chip`, `.bet-picker`, `.bet-label` |
 | 状态标签 | `.deal-tag`, `.bet-tag`, `.score-tag`, `.mock-tag` |
 | 结果标签 | `.result-win`, `.result-lose`, `.result-tie`, `.result-neutral` |
@@ -254,8 +258,9 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] 数据模型字段变动 → 同步云函数写入 & API 路由 & `sanitizeRoom()` & 前端渲染
 - [ ] 状态流转变动 → 同步所有涉及 `status` 判断的云函数 & API 路由 & 前端条件渲染
 - [ ] UI/样式变动 → 同步 WXSS & CSS（注意 rpx→px 换算）
+- [ ] 新增瞬时 Socket 事件 → 记录事件名、身份边界、是否写 `room` / 触发 `roomUpdate`，并明确小程序是否同步
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
 
-> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能（仅房主、任意时刻、踢中庄家自动迁移）、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）** 目前仅 Web 版实现。小程序版如需对齐，需在对应云函数和页面中实现等价逻辑。
+> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能（仅房主、任意时刻、踢中庄家自动迁移）、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）**、**鸡蛋/西红柿瞬时互动（`throwProp` / `propThrown`）** 目前仅 Web 版实现。道具互动不属于两端共享房间数据模型；小程序版如需对齐，需单独设计实时通信与动画方案。
 >
 > **牌组**：Web 版已在 `executeResetRound` 实现 **全开全胜过庄（`passDealer`）后必洗 52 张**；小程序 `resetRound` 云函数若规则一致，须在 `passDealer` 时同样整副洗牌并清空本局手牌，避免与 Web 行为不一致。
