@@ -21,8 +21,9 @@
 | 离线托管 | ✅ 已完成 | 下注阶段自动下注1、庄家离线自动全开不过庄 |
 | 踢人功能 | ✅ 已完成 | 房主任意时刻可移出任一玩家（无需离线），✕ 按钮+确认弹窗；踢中庄家自动迁移 |
 | 玩家道具互动 | ✅ 已完成 | 点击头像扔鸡蛋/西红柿，全房间同步飞行和命中炸开；服务端每人 1 秒限流，不影响牌局状态 |
+| VIP 高亮横幅 | ✅ 已完成 | 入局、下注、成为庄家、开牌四类黑金横幅；服务端权限、下注 8 秒防刷、客户端队列与 eventId 去重 |
 | 断线重连优化 | ✅ 已完成 | visibilitychange 自动刷新 + Socket.IO 快速重连 |
-| 部署后自动化测试 | ✅ 已完成 | 密钥保护测试页，66 项用例一键运行，实时结果+失败诊断 |
+| 部署后自动化测试 | ✅ 已完成 | 密钥保护测试页，75 项用例一键运行，实时结果+失败诊断 |
 | 服务器部署 | ✅ 已完成 | PM2 进程管理，支持生产环境运行 |
 | HTTPS + 域名 | 🔲 待完成 | Nginx 反向代理 + Let's Encrypt 证书 |
 | 数据持久化 | 🔲 待完成 | 当前为内存存储，重启后数据丢失 |
@@ -37,14 +38,18 @@
 ## 项目结构
 
 ```
-├── server.js            # 后端：API 路由 + 游戏引擎 + Socket.IO + 测试清理接口
+├── server.js                 # 后端：API 路由 + 游戏引擎 + Socket.IO + 测试清理接口
+├── member-banner-core.js     # VIP 配置、权限、统一 payload、文案与优先级
+├── member-banner-events.js   # eventId、下注冷却、庄家变化与批量广播
 ├── public/
-│   ├── index.html       # 入口 HTML
-│   ├── app.js           # 前端：路由、状态管理、页面渲染、交互逻辑、测试页路由
-│   ├── test-runner.js   # 部署后自动化测试运行器（66 项用例 + 实时诊断）
-│   ├── assets/props/    # 鸡蛋/西红柿飞行、命中和飞溅透明 WebP
-│   ├── qrcode.min.js    # 二维码生成库（qrcode-generator）
-│   └── style.css        # 全局样式（含测试页面样式）
+│   ├── index.html            # 入口 HTML
+│   ├── app.js                # 前端：路由、页面、交互与 MemberBannerManager
+│   ├── member-banner-queue.js # 横幅优先级队列、容量与 eventId 去重
+│   ├── test-runner.js        # 部署后自动化测试运行器（75 项用例 + 实时诊断）
+│   ├── assets/props/         # 鸡蛋/西红柿飞行、命中和飞溅透明 WebP
+│   ├── qrcode.min.js         # 二维码生成库（qrcode-generator）
+│   └── style.css             # 全局样式（含赌场盛典横幅与测试页）
+├── test/                     # Node 单元及真实 HTTP 服务集成测试
 ├── package.json
 ├── SYNC_MAP.md          # 小程序版 ↔ Web 版联动映射表
 └── .gitignore
@@ -59,6 +64,14 @@ npm install
 npm start
 # 访问 http://localhost:3000
 ```
+
+VIP 默认昵称为 `wxw`、`傻叼刘敏`。可在服务启动时通过 `MEMBER_PROFILES_JSON` 覆盖、增加或禁用配置：
+
+```bash
+MEMBER_PROFILES_JSON='{"wxw":{"memberLevel":"svip","bannerTheme":"casino_spectacle","privilegeFlags":["banner:join","banner:bet","banner:banker","banner:open_card"]},"傻叼刘敏":null}' npm start
+```
+
+同名配置覆盖默认值，新增昵称会加入白名单，值为 `null` 时禁用。当前会员识别基于服务端昵称白名单，不代表昵称所有权认证。
 
 ### 服务器部署
 
@@ -100,9 +113,24 @@ cd ~/zhajinhua-web && git pull && pm2 restart zhajinhua-web
 
 **原因**：此前仅 `getRoom` 会误以为已进房，实际未 `joinRoom`，房主侧人数不足无法发牌（≥2 人）。
 
-**Socket**：`initRoomPage` 仍会 `joinSocketRoom` 订阅广播；**真正入桌**以 HTTP `joinRoom` 为准。未入桌连接只能订阅频道，不能发送玩家道具互动；HTTP 入桌成功后前端会再次执行 `joinSocketRoom`，由服务端登记可发送身份。
+**Socket**：`initRoomPage` 仍会 `joinSocketRoom` 订阅广播；**真正入桌**以 HTTP `joinRoom` 为准。未入桌连接只能订阅频道，不能发送玩家道具互动；HTTP 入桌成功后前端会再次执行 `joinSocketRoom`，由服务端登记可发送身份。VIP 首次加入时，已订阅的邀请页可能同时从 Socket 和 HTTP 收到同一条 `memberBanner`，客户端使用相同 `eventId` 去重，只播放一次。
 
 `getRoom` 失败（房间不存在等）时跳转大厅，避免空白加载。
+
+## VIP 高亮横幅
+
+服务端在会员成功执行以下动作时发送 Web-only 瞬时 `memberBanner`：
+
+```text
+banker (40) > open_card (30) > join (20) > bet (10)
+```
+
+- 入局、下注、成为庄家、主动开牌均由服务端根据 `privilegeFlags` 决定是否触发，客户端不能自行申报会员等级。
+- 同一会员在同一房间的下注横幅有 8 秒冷却；冷却只抑制横幅，不影响合法下注。
+- 客户端一次只播放一条，当前项不被打断；等待队列按优先级及到达顺序串行播放，最多保留 8 条。
+- HTTP/Socket 重复事件按 `eventId` 去重，最近保留 100 个 ID。
+- 横幅约 3 秒消失，可从同一房间的 room 页面继续播放到 result 页面；离开房间、进入测试页或被踢时清理。
+- 横幅不写入房间历史或 `Room`，不会额外触发 `roomUpdate`，也不会改变下注、手牌、分数或结算状态。
 
 ## 游戏规则
 
@@ -145,7 +173,7 @@ cd ~/zhajinhua-web && git pull && pm2 restart zhajinhua-web
 
 ## 自测报告
 
-全部 66 项测试通过（可通过部署后测试页面一键运行验证）：
+全部 75 项浏览器测试通过，Node 单元/集成测试通过（可通过部署后测试页面与 `npm test` 验证）：
 
 | 类别 | 覆盖场景 |
 |------|----------|
@@ -159,8 +187,10 @@ cd ~/zhajinhua-web && git pull && pm2 restart zhajinhua-web
 | 边界防护 | 空房间号、不存在房间、缺 playerId、非 waiting 发牌被拒、重复下注被拒 |
 | 牌组管理 | 16 轮消耗后自动洗牌；**全开全胜过庄**后下一局 `resetRound` 整副洗 52 张；牌不足时自动过庄洗牌 |
 | 静态资源 | 首页/app.js/style.css/qrcode.min.js/test-runner.js 与 6 个透明 WebP 道具资产均返回 200 |
-| Socket.IO | 实际连接、鸡蛋/西红柿广播、成员身份、旧连接、离开频道、1 秒限流、失败不耗冷却、离线目标、无 `roomUpdate` 副作用 |
+| Socket.IO | 实际连接、鸡蛋/西红柿与 `memberBanner` 广播、成员身份、旧连接、离开频道、限流/冷却、离线目标、无额外 `roomUpdate` |
 | 玩家道具互动 | 未入桌只能订阅、入桌后可发送；向自己/非法类型/不存在目标/被踢发送均被拒绝 |
+| VIP 会员横幅 | 默认/环境会员配置、玩家字段、四类 payload、三种开牌文案、banker→open→join→bet 排序、HTTP/Socket eventId 一致、重入不误播、下注冷却、普通玩家静默 |
+| 客户端横幅队列 | 优先级/FIFO、活动项不打断、8 条容量、优先丢弃旧 bet、100 个 ID 去重、错误上下文不渲染 |
 
 测试运行器特性：
 - 每个失败用例附带完整 API 响应诊断（ok/code/message/room 状态）

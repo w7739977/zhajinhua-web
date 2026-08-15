@@ -222,6 +222,7 @@
     var G10 = '10. 静态资源';
     var G11 = '11. Socket.IO 连通';
     var G12 = '12. 玩家道具互动';
+    var G13 = '13. VIP 会员横幅';
 
     var t1_1 = register(G1, '创建房间');
     var t1_2 = register(G1, '玩家B加入');
@@ -280,6 +281,7 @@
     var t10_9 = register(G10, '西红柿飞行模型 200');
     var t10_10 = register(G10, '西红柿命中效果 200');
     var t10_11 = register(G10, '西红柿飞溅效果 200');
+    var t10_12 = register(G10, 'member-banner-queue.js 200');
 
     var t11_1 = register(G11, 'Socket.IO 握手');
 
@@ -300,6 +302,15 @@
     var t12_15 = register(G12, '可向房内离线玩家发送');
     var t12_16 = register(G12, '结果阶段拒绝道具互动');
     var t12_17 = register(G12, '被踢旧连接重入后仍失效');
+
+    var t13_1 = register(G13, 'VIP 创建响应按 banker→join 排序');
+    var t13_2 = register(G13, '首次 VIP 加入 HTTP/Socket eventId 一致');
+    var t13_3 = register(G13, 'VIP 重入不重复触发 join');
+    var t13_4 = register(G13, 'VIP 下注在 roomUpdate 后广播且无额外更新');
+    var t13_5 = register(G13, '8 秒内再次下注成功但横幅被冷却');
+    var t13_6 = register(G13, 'VIP 主动开牌广播正确 openMode');
+    var t13_7 = register(G13, '普通玩家成功下注和开牌均无横幅');
+    var t13_8 = register(G13, '错误页面上下文不渲染横幅 DOM');
 
     updateUI();
 
@@ -604,6 +615,8 @@
       check(t10_10, s10_10 === 200, 'status=' + s10_10);
       var s10_11 = await ms(t10_11, function () { return httpGet('/assets/props/tomato-splat.webp'); });
       check(t10_11, s10_11 === 200, 'status=' + s10_11);
+      var s10_12 = await ms(t10_12, function () { return httpGet('/member-banner-queue.js'); });
+      check(t10_12, s10_12 === 200, 'status=' + s10_12);
 
       // =============== G11: Socket.IO ===============
       var s11 = await ms(t11_1, function () { return httpGet('/socket.io/socket.io.js'); });
@@ -1020,6 +1033,223 @@
           'resp=' + brief(openedAck));
       } catch (openedErr) {
         check(t12_16, false, openedErr.message || String(openedErr));
+      }
+
+      // =============== G13: VIP 会员横幅 ===============
+      try {
+        var vipCreateId = runPrefix + 'banner_create_' + Date.now();
+        var vipCreate = await ms(t13_1, function () {
+          return post('createRoom', { playerId: vipCreateId, nickName: 'wxw' });
+        });
+        var createTypes = (vipCreate.memberBanners || []).map(function (event) { return event.type; });
+        check(t13_1, vipCreate.ok && createTypes.join(',') === 'banker,join' &&
+          vipCreate.memberBanners[0].playerId === vipCreateId &&
+          vipCreate.memberBanners[0].eventId !== vipCreate.memberBanners[1].eventId,
+          'resp=' + brief(vipCreate));
+      } catch (vipCreateErr) {
+        check(t13_1, false, vipCreateErr.message || String(vipCreateErr));
+      }
+
+      try {
+        var bannerOwnerId = runPrefix + 'banner_owner_' + Date.now();
+        var bannerVipId = runPrefix + 'banner_vip_' + Date.now();
+        var bannerRoom = await post('createRoom', { playerId: bannerOwnerId, nickName: '横幅房主' });
+        var bannerSocket = await connectTestSocket();
+        testSockets.push(bannerSocket);
+        await emitArgsWithAck(bannerSocket, 'joinRoom', [bannerRoom.roomId, bannerOwnerId]);
+
+        var joinOrder = [];
+        function recordJoinUpdate(room) {
+          if (room && room.roomId === bannerRoom.roomId &&
+              room.players.some(function (player) { return player.openId === bannerVipId; })) {
+            joinOrder.push('roomUpdate');
+          }
+        }
+        function recordJoinBanner(event) {
+          if (event && event.roomId === bannerRoom.roomId && event.playerId === bannerVipId && event.type === 'join') {
+            joinOrder.push('memberBanner');
+          }
+        }
+        bannerSocket.on('roomUpdate', recordJoinUpdate);
+        bannerSocket.on('memberBanner', recordJoinBanner);
+        var joinUpdatePromise = waitForEvent(bannerSocket, 'roomUpdate', function (room) {
+          return room && room.roomId === bannerRoom.roomId &&
+            room.players.some(function (player) { return player.openId === bannerVipId; });
+        });
+        var joinBannerPromise = waitForEvent(bannerSocket, 'memberBanner', function (event) {
+          return event && event.roomId === bannerRoom.roomId && event.playerId === bannerVipId && event.type === 'join';
+        });
+        var joinResponsePromise = post('joinRoom', {
+          playerId: bannerVipId,
+          roomId: bannerRoom.roomId,
+          nickName: 'wxw'
+        });
+        var joinValues = await ms(t13_2, function () {
+          return Promise.all([joinResponsePromise, joinUpdatePromise, joinBannerPromise]);
+        });
+        bannerSocket.off('roomUpdate', recordJoinUpdate);
+        bannerSocket.off('memberBanner', recordJoinBanner);
+        var joinResponse = joinValues[0];
+        var joinEvent = joinValues[2];
+        check(t13_2, joinResponse.ok && joinResponse.memberBanners.length === 1 &&
+          joinResponse.memberBanners[0].eventId === joinEvent.eventId &&
+          joinOrder[0] === 'roomUpdate' && joinOrder[1] === 'memberBanner',
+          'order=' + joinOrder.join('>') + ' http=' + brief(joinResponse.memberBanners) + ' socket=' + brief(joinEvent));
+
+        var noRejoinEvent = expectNoEvent(bannerSocket, 'memberBanner', function (event) {
+          return event && event.roomId === bannerRoom.roomId && event.playerId === bannerVipId && event.type === 'join';
+        }, 300);
+        var rejoinResponse = await post('joinRoom', {
+          playerId: bannerVipId,
+          roomId: bannerRoom.roomId,
+          nickName: 'wxw'
+        });
+        var rejoinSilent = await ms(t13_3, function () { return noRejoinEvent; });
+        check(t13_3, rejoinResponse.ok && rejoinSilent === true &&
+          Array.isArray(rejoinResponse.memberBanners) && rejoinResponse.memberBanners.length === 0,
+          'silent=' + rejoinSilent + ' resp=' + brief(rejoinResponse));
+
+        await post('deal', { playerId: bannerOwnerId, roomId: bannerRoom.roomId });
+        var betOrder = [];
+        var betRoomUpdates = 0;
+        function recordBetUpdate(room) {
+          if (room && room.roomId === bannerRoom.roomId) {
+            betRoomUpdates++;
+            betOrder.push('roomUpdate');
+          }
+        }
+        function recordBetBanner(event) {
+          if (event && event.roomId === bannerRoom.roomId && event.playerId === bannerVipId && event.type === 'bet') {
+            betOrder.push('memberBanner');
+          }
+        }
+        bannerSocket.on('roomUpdate', recordBetUpdate);
+        bannerSocket.on('memberBanner', recordBetBanner);
+        var betBannerPromise = waitForEvent(bannerSocket, 'memberBanner', function (event) {
+          return event && event.roomId === bannerRoom.roomId && event.playerId === bannerVipId && event.type === 'bet';
+        });
+        var betResponsePromise = post('bet', {
+          playerId: bannerVipId,
+          roomId: bannerRoom.roomId,
+          bet: 3
+        });
+        var betValues = await ms(t13_4, function () {
+          return Promise.all([betResponsePromise, betBannerPromise]);
+        });
+        await delay(100);
+        bannerSocket.off('roomUpdate', recordBetUpdate);
+        bannerSocket.off('memberBanner', recordBetBanner);
+        check(t13_4, betValues[0].ok && betValues[1].amount === 3 && betRoomUpdates === 1 &&
+          betOrder[0] === 'roomUpdate' && betOrder[1] === 'memberBanner',
+          'updates=' + betRoomUpdates + ' order=' + betOrder.join('>') + ' event=' + brief(betValues[1]));
+
+        await post('open', {
+          playerId: bannerOwnerId,
+          roomId: bannerRoom.roomId,
+          mode: 'openAllNoPass',
+          selectedOpenIds: []
+        });
+        await post('resetRound', { playerId: bannerOwnerId, roomId: bannerRoom.roomId });
+        await post('deal', { playerId: bannerOwnerId, roomId: bannerRoom.roomId });
+        var noCooldownBanner = expectNoEvent(bannerSocket, 'memberBanner', function (event) {
+          return event && event.roomId === bannerRoom.roomId && event.playerId === bannerVipId && event.type === 'bet';
+        }, 350);
+        var cooldownBet = await post('bet', {
+          playerId: bannerVipId,
+          roomId: bannerRoom.roomId,
+          bet: 2
+        });
+        var cooldownSilent = await ms(t13_5, function () { return noCooldownBanner; });
+        check(t13_5, cooldownBet.ok && cooldownSilent === true &&
+          cooldownBet.room.players.find(function (player) { return player.openId === bannerVipId; }).bet === 2,
+          'betOk=' + cooldownBet.ok + ' silent=' + cooldownSilent);
+      } catch (bannerFlowErr) {
+        [t13_2, t13_3, t13_4, t13_5].forEach(function (test) {
+          if (test.status !== 'pass' && test.status !== 'fail') check(test, false, bannerFlowErr.message || String(bannerFlowErr));
+        });
+      }
+
+      try {
+        var openVipId = runPrefix + 'banner_open_vip_' + Date.now();
+        var openPlayerId = runPrefix + 'banner_open_player_' + Date.now();
+        var openRoom = await post('createRoom', { playerId: openVipId, nickName: 'wxw' });
+        await post('joinRoom', { playerId: openPlayerId, roomId: openRoom.roomId, nickName: '普通玩家' });
+        var openSocket = await connectTestSocket();
+        testSockets.push(openSocket);
+        await emitArgsWithAck(openSocket, 'joinRoom', [openRoom.roomId, openPlayerId]);
+        await post('deal', { playerId: openVipId, roomId: openRoom.roomId });
+        await post('bet', { playerId: openPlayerId, roomId: openRoom.roomId, bet: 1 });
+        var openBannerPromise = waitForEvent(openSocket, 'memberBanner', function (event) {
+          return event && event.roomId === openRoom.roomId && event.playerId === openVipId && event.type === 'open_card';
+        });
+        var openResponsePromise = post('open', {
+          playerId: openVipId,
+          roomId: openRoom.roomId,
+          mode: 'openAllNoPass',
+          selectedOpenIds: []
+        });
+        var openValues = await ms(t13_6, function () {
+          return Promise.all([openResponsePromise, openBannerPromise]);
+        });
+        check(t13_6, openValues[0].ok && openValues[1].openMode === 'openAllNoPass' &&
+          openValues[1].message.indexOf('霸气全开，王座不让') !== -1,
+          'resp=' + brief(openValues));
+      } catch (openBannerErr) {
+        check(t13_6, false, openBannerErr.message || String(openBannerErr));
+      }
+
+      try {
+        var ordinaryOwner = runPrefix + 'banner_ordinary_owner_' + Date.now();
+        var ordinaryPlayer = runPrefix + 'banner_ordinary_player_' + Date.now();
+        var ordinaryRoom = await post('createRoom', { playerId: ordinaryOwner, nickName: '普通庄家' });
+        await post('joinRoom', { playerId: ordinaryPlayer, roomId: ordinaryRoom.roomId, nickName: '普通闲家' });
+        var ordinarySocket = await connectTestSocket();
+        testSockets.push(ordinarySocket);
+        await emitArgsWithAck(ordinarySocket, 'joinRoom', [ordinaryRoom.roomId, ordinaryOwner]);
+        await post('deal', { playerId: ordinaryOwner, roomId: ordinaryRoom.roomId });
+        var noOrdinaryBet = expectNoEvent(ordinarySocket, 'memberBanner', function (event) {
+          return event && event.roomId === ordinaryRoom.roomId && event.type === 'bet';
+        }, 300);
+        var ordinaryBet = await post('bet', { playerId: ordinaryPlayer, roomId: ordinaryRoom.roomId, bet: 1 });
+        var ordinaryBetSilent = await noOrdinaryBet;
+        var noOrdinaryOpen = expectNoEvent(ordinarySocket, 'memberBanner', function (event) {
+          return event && event.roomId === ordinaryRoom.roomId && event.type === 'open_card';
+        }, 300);
+        var ordinaryOpen = await post('open', {
+          playerId: ordinaryOwner,
+          roomId: ordinaryRoom.roomId,
+          mode: 'openAllNoPass',
+          selectedOpenIds: []
+        });
+        var ordinaryOpenSilent = await ms(t13_7, function () { return noOrdinaryOpen; });
+        check(t13_7, ordinaryBet.ok && ordinaryOpen.ok && ordinaryBetSilent && ordinaryOpenSilent,
+          'betSilent=' + ordinaryBetSilent + ' openSilent=' + ordinaryOpenSilent);
+      } catch (ordinaryErr) {
+        check(t13_7, false, ordinaryErr.message || String(ordinaryErr));
+      }
+
+      try {
+        var beforeBannerNodes = document.querySelectorAll('.member-banner-layer').length;
+        var acceptedWrongContext = await ms(t13_8, function () {
+          return Promise.resolve(window.MemberBannerManager.enqueue({
+            eventId: 'test-wrong-context-' + Date.now(),
+            roomId: 'not-current-room',
+            type: 'join',
+            priority: 20,
+            playerId: 'vip-test',
+            nickname: 'wxw',
+            memberLevel: 'vip',
+            bannerTheme: 'casino_spectacle',
+            privilegeFlags: ['banner:join'],
+            message: '♛ VIP · wxw 尊耀降临，华丽入局',
+            subtitle: 'ROYAL MEMBER ARRIVAL'
+          }));
+        });
+        var afterBannerNodes = document.querySelectorAll('.member-banner-layer').length;
+        check(t13_8, acceptedWrongContext === false && beforeBannerNodes === afterBannerNodes,
+          'accepted=' + acceptedWrongContext + ' before=' + beforeBannerNodes + ' after=' + afterBannerNodes);
+      } catch (contextErr) {
+        check(t13_8, false, contextErr.message || String(contextErr));
       }
 
       try {

@@ -22,6 +22,7 @@
 | `cloudfunctions/resetRound/index.js` | `server.js` → `POST /api/resetRound` | 新一局 |
 | — | `server.js` → `POST /api/kickPlayer` | 踢人（Web 独有）：仅房主，任意时刻可踢，踢中庄家自动迁移 |
 | — | `server.js` → Socket `throwProp` / `propThrown` | 鸡蛋/西红柿瞬时互动（Web 独有）：服务端身份校验、1 秒限流，不写房间状态 |
+| — | `member-banner-core.js` / `member-banner-events.js` / `server.js` | VIP 会员配置、四类横幅、eventId、下注冷却和 `memberBanner` 广播（Web 独有，不写 Room） |
 | — | `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理（Web 独有，密钥保护） |
 
 > **改动规则**：修改任何云函数的业务逻辑时，必须同步修改 `server.js` 中对应的路由处理函数。
@@ -40,13 +41,19 @@
 | `pages/result/result.wxml` | `public/app.js` → `renderResult()` 内 HTML 模板 | 结果页模板 |
 | `pages/result/result.wxss` | `public/style.css` → `/* Result Page */` 区块 | 结果页样式 |
 | `app.js` | `public/app.js` → 顶部 `state` 对象 | 全局状态 |
+| — | `public/member-banner-queue.js` + `public/app.js` → `MemberBannerManager` | VIP 横幅队列、去重、跨 room/result 播放与上下文清理（Web 独有） |
 | `app.wxss` | `public/style.css` → 顶部全局样式 | 全局样式 |
+| — | `public/style.css` → `.member-banner-*` | 赌场盛典黑金横幅、移动端和 reduced-motion（Web 独有） |
 
 ### 测试文件（Web 独有）
 
 | Web 版文件 | 说明 |
 |---|---|
-| `public/test-runner.js` | 部署后自动化测试运行器（66 项用例，含真实 Socket 道具互动、限流与无状态副作用验证） |
+| `public/test-runner.js` | 部署后自动化测试运行器（75 项用例，含真实 Socket 道具互动、VIP 横幅顺序/冷却/eventId 与无额外 roomUpdate 验证） |
+| `test/member-banner-core.test.js` | 会员配置、权限、统一 payload、文案和优先级单元测试 |
+| `test/member-banner-events.test.js` | eventId、庄家变化、8 秒下注冷却和广播排序单元测试 |
+| `test/member-banner-queue.test.js` | 客户端队列、容量、淘汰和 100 个 eventId 去重单元测试 |
+| `test/member-profile-server.test.js` | 真实 HTTP 服务的玩家会员字段及 create/join 横幅响应集成测试 |
 | `public/app.js` → `initTestPage()` / `renderTestPage()` | 测试页路由与 UI |
 | `public/style.css` → `.test-*` 样式 | 测试页面样式（进度条、通过/失败状态） |
 | `server.js` → `POST /api/_cleanTestRooms` | 测试房间清理接口（TEST_KEY + 本次运行 ownerPrefix，避免并发互删） |
@@ -118,7 +125,9 @@
 | `passDealerShuffle` | `true` 表示上一局 `roundResult.passDealer`（全开全胜过庄），本局已 `shuffle(createDeck())` |
 | `dealerOpenId` | 重置后当前庄家 |
 
-> **改动规则**：新增/修改接口参数时，两边同步改；Web 版始终多传 `playerId`。
+**Web `createRoom` / `joinRoom` 补充响应**：成功响应可包含 `memberBanners`。创建会员房间返回按优先级排序的 `banker`、`join`；首次加入会员返回 `join`，已有玩家重入返回空数组。邀请页可能同时通过 HTTP 与 Socket 收到同一 `eventId`，前端必须去重。
+
+> **改动规则**：新增/修改接口参数时，两边同步改；Web 版始终多传 `playerId`。`memberBanners` 是 Web 瞬时显示协议，不属于共享房间模型。
 
 ---
 
@@ -141,6 +150,7 @@
 | 加入房间频道 | watch 自动按 `where` 条件过滤 | `socket.emit('joinRoom', roomId)`；非成员可订阅，但只有 HTTP 已入桌玩家才登记可发送身份 |
 | 离开房间频道 | `watcher.close()` | `socket.emit('leaveRoom', roomId)`；`throwProp` 额外校验 Socket 仍在频道 |
 | 鸡蛋/西红柿互动 | — | 客户端 `throwProp` → 服务端校验成员/最新连接/1 秒冷却 → 房间广播 `propThrown`；不写 `room`、不触发 `roomUpdate` |
+| VIP 会员横幅 | — | 服务端在 join/bet/banker/open 成功路径广播 `memberBanner`；同一操作按 banker > open_card > join > bet 排序；不写 `room`、不产生额外 `roomUpdate`，HTTP/Socket 用 `eventId` 去重 |
 
 > **改动规则**：如果修改了云函数中的数据库写入字段，Web 版 `broadcastRoom()` 调用的 `sanitizeRoom()` 也要同步返回该字段。
 > 修改小程序 `onShow` 恢复逻辑时，需同步修改 Web 版 `visibilitychange` 处理。
@@ -168,6 +178,7 @@
 | — | 部署后自动化测试 | `app.js` → `initTestPage()` + `test-runner.js` → `TestRunner.run()` |
 | — | 邀请链接先入桌 | `app.js` → `playerInRoom()` / `renderPendingJoin()` / `App.joinRoomFromInvite()` / `App.backToLobbyFromInvite()` |
 | — | 玩家道具互动 | `app.js` → `App.togglePropMenu()` / `App.sendProp()` / `playPropThrown()` / `playPropImpact()`；`style.css` → `.prop-*` |
+| — | VIP 会员横幅 | `member-banner-queue.js` + `app.js` → `MemberBannerManager`；`style.css` → `.member-banner-*` |
 
 ### 邀请链接进房（Web 独有流程说明）
 
@@ -189,11 +200,17 @@ roomId, ownerOpenId, dealerOpenId, status, deck,
 publicCard, roundResult, players[], createdAt, updatedAt
 ```
 
-Player 对象：
+Player 对象（共享游戏字段）：
 ```
 openId, nickName, avatarUrl, hasDealt, card, bet, score,
 spectating, offline, autoBet, retainedCard, [isMock]
 ```
+
+Web `sanitizeRoom()` 额外返回会员显示字段：
+```
+memberLevel, bannerTheme, privilegeFlags[]
+```
+这些字段由 Web 服务端昵称白名单决定；小程序目前没有对应会员系统。横幅等待队列、eventId 记录和下注冷却均为进程/客户端瞬时状态，**不得写入 Room 或 RoundResult**。
 
 RoundResult 对象：
 ```
@@ -209,7 +226,7 @@ openId, nickName, avatarUrl, handCard, wildCard, handType,
 handTypeName, bet, result, playerDrinks, dealerDrinks
 ```
 
-> **改动规则**：新增/删除/重命名任何字段时，两边的读写代码都必须同步。
+> **改动规则**：共享游戏字段新增/删除/重命名时，两边的读写代码必须同步。明确标记为 Web-only 的会员显示字段不自动同步到小程序，但必须同步维护 `sanitizeRoom()` 与 `updateRoomView()` 的安全默认值。
 
 **Web 版 `resetRound`（`executeResetRound`）牌组**：若上一局 `roundResult.passDealer === true`（全开全胜过庄），**强制** `shuffle(createDeck())` 并清空全员手牌，保证下一局从整副 52 张起算；否则沿用剩余 `deck`，仅当 `deck.length < 所需张数` 时自动过庄并洗牌。
 
@@ -239,6 +256,7 @@ CSS 类名两版保持一致，便于视觉联动调整：
 | 庄家标识 | `.crown-badge`, `.crown-badge-self` |
 | 选人高亮 | `.player-selected` |
 | 道具互动 | `.prop-avatar-target`, `.prop-menu-*`, `.prop-projectile`, `.prop-impact`, `.prop-splat` |
+| VIP 横幅（Web-only） | `.member-banner-layer`, `.member-banner-*` |
 | 下注筹码 | `.bet-chip`, `.bet-picker`, `.bet-label` |
 | 状态标签 | `.deal-tag`, `.bet-tag`, `.score-tag`, `.mock-tag` |
 | 结果标签 | `.result-win`, `.result-lose`, `.result-tie`, `.result-neutral` |
@@ -261,6 +279,6 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] 新增瞬时 Socket 事件 → 记录事件名、身份边界、是否写 `room` / 触发 `roomUpdate`，并明确小程序是否同步
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
 
-> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能（仅房主、任意时刻、踢中庄家自动迁移）、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）**、**鸡蛋/西红柿瞬时互动（`throwProp` / `propThrown`）** 目前仅 Web 版实现。道具互动不属于两端共享房间数据模型；小程序版如需对齐，需单独设计实时通信与动画方案。
+> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能（仅房主、任意时刻、踢中庄家自动迁移）、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）**、**鸡蛋/西红柿瞬时互动（`throwProp` / `propThrown`）**、**VIP 会员横幅（`memberBanner`）** 目前仅 Web 版实现。道具与会员横幅都不属于两端共享房间历史；小程序版如需对齐，需单独设计可信会员数据源、实时协议与动画方案。
 >
 > **牌组**：Web 版已在 `executeResetRound` 实现 **全开全胜过庄（`passDealer`）后必洗 52 张**；小程序 `resetRound` 云函数若规则一致，须在 `passDealer` 时同样整副洗牌并清空本局手牌，避免与 Web 行为不一致。

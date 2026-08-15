@@ -104,8 +104,184 @@
     isNavigatingToResult: false,
 
     roundResult: null,
-    roomPlayers: []
+    roomPlayers: [],
+    pendingMemberBanners: null
   };
+
+  // ============================================================
+  // Member Action Banner
+  // ============================================================
+
+  var MEMBER_BANNER_PRIORITIES = {
+    banker: 40,
+    open_card: 30,
+    join: 20,
+    bet: 10
+  };
+  var memberBannerQueue = window.MemberBannerQueue.createMemberBannerQueue({
+    maxPending: 8,
+    maxSeen: 100
+  });
+  var memberBannerActiveNode = null;
+  var memberBannerActiveElement = null;
+  var memberBannerCompletionTimer = null;
+  var memberBannerAnimationHandler = null;
+  var memberBannerDrainScheduled = false;
+
+  function isMemberBannerPayloadValid(event) {
+    if (!event || !event.eventId || !event.roomId || !String(event.nickname || '').trim()) return false;
+    if (!Object.prototype.hasOwnProperty.call(MEMBER_BANNER_PRIORITIES, event.type)) return false;
+    if (event.priority !== MEMBER_BANNER_PRIORITIES[event.type]) return false;
+    if (!event.memberLevel || event.bannerTheme !== 'casino_spectacle') return false;
+    if (!Array.isArray(event.privilegeFlags) ||
+        !event.privilegeFlags.includes('banner:' + event.type)) return false;
+    if (!event.message || !event.subtitle) return false;
+    return true;
+  }
+
+  function isMemberBannerContextAllowed(roomId) {
+    var roomMatches = state.roomId === String(roomId);
+    return roomMatches && (state.currentPage === 'room' || state.currentPage === 'result');
+  }
+
+  function removeActiveMemberBanner() {
+    if (memberBannerCompletionTimer != null) {
+      clearTimeout(memberBannerCompletionTimer);
+      memberBannerCompletionTimer = null;
+    }
+    if (memberBannerActiveElement && memberBannerAnimationHandler) {
+      memberBannerActiveElement.removeEventListener('animationend', memberBannerAnimationHandler);
+    }
+    memberBannerAnimationHandler = null;
+    memberBannerActiveElement = null;
+    if (memberBannerActiveNode && memberBannerActiveNode.parentNode) {
+      memberBannerActiveNode.parentNode.removeChild(memberBannerActiveNode);
+    }
+    memberBannerActiveNode = null;
+  }
+
+  function scheduleMemberBannerDrain() {
+    if (memberBannerDrainScheduled) return;
+    memberBannerDrainScheduled = true;
+    Promise.resolve().then(function () {
+      memberBannerDrainScheduled = false;
+      drainMemberBanners();
+    });
+  }
+
+  function completeMemberBanner(eventId) {
+    if (!memberBannerQueue.active() || memberBannerQueue.active().eventId !== eventId) return;
+    removeActiveMemberBanner();
+    memberBannerQueue.finish(eventId);
+    scheduleMemberBannerDrain();
+  }
+
+  function playMemberBanner(event) {
+    if (!isMemberBannerContextAllowed(event.roomId)) {
+      memberBannerQueue.finish(event.eventId);
+      scheduleMemberBannerDrain();
+      return;
+    }
+
+    var layer = document.createElement('div');
+    layer.className = 'member-banner-layer';
+    var banner = document.createElement('div');
+    banner.className = 'member-banner member-banner--casino-spectacle';
+    banner.setAttribute('role', 'status');
+    banner.setAttribute('aria-live', 'polite');
+
+    var ornamentTop = document.createElement('span');
+    ornamentTop.className = 'member-banner-ornament ornament-top';
+    var ornamentBottom = document.createElement('span');
+    ornamentBottom.className = 'member-banner-ornament ornament-bottom';
+    var crown = document.createElement('span');
+    crown.className = 'member-banner-crown';
+    crown.textContent = '♛';
+    var copy = document.createElement('div');
+    copy.className = 'member-banner-copy';
+    var message = document.createElement('div');
+    message.className = 'member-banner-message';
+    message.textContent = event.message;
+    var subtitle = document.createElement('div');
+    subtitle.className = 'member-banner-subtitle';
+    subtitle.textContent = event.subtitle;
+    var particles = document.createElement('span');
+    particles.className = 'member-banner-particles';
+    var shine = document.createElement('span');
+    shine.className = 'member-banner-shine';
+
+    copy.appendChild(message);
+    copy.appendChild(subtitle);
+    banner.appendChild(ornamentTop);
+    banner.appendChild(ornamentBottom);
+    banner.appendChild(crown);
+    banner.appendChild(copy);
+    banner.appendChild(particles);
+    banner.appendChild(shine);
+    layer.appendChild(banner);
+    document.body.appendChild(layer);
+
+    memberBannerActiveNode = layer;
+    memberBannerActiveElement = banner;
+    var completed = false;
+    function finish() {
+      if (completed) return;
+      completed = true;
+      completeMemberBanner(event.eventId);
+    }
+    memberBannerAnimationHandler = function (animationEvent) {
+      if (animationEvent.target !== banner) return;
+      if (animationEvent.animationName === 'memberBannerLifecycle' ||
+          animationEvent.animationName === 'memberBannerLifecycleReduced') finish();
+    };
+    banner.addEventListener('animationend', memberBannerAnimationHandler);
+    memberBannerCompletionTimer = setTimeout(finish, 3300);
+  }
+
+  function drainMemberBanners() {
+    if (memberBannerQueue.active()) return;
+    var event = memberBannerQueue.takeNext();
+    if (!event) return;
+    playMemberBanner(event);
+  }
+
+  var MemberBannerManager = {
+    enqueue: function (event) {
+      if (!isMemberBannerPayloadValid(event)) return false;
+      if (!isMemberBannerContextAllowed(event.roomId)) return false;
+      var accepted = memberBannerQueue.enqueue(event);
+      if (accepted) scheduleMemberBannerDrain();
+      return accepted;
+    },
+    enqueueMany: function (events) {
+      var manager = this;
+      (Array.isArray(events) ? events : []).forEach(function (event) {
+        manager.enqueue(event);
+      });
+    },
+    clear: function () {
+      removeActiveMemberBanner();
+      memberBannerQueue.clear();
+      memberBannerDrainScheduled = false;
+    },
+    isContextAllowed: isMemberBannerContextAllowed,
+    hasSeen: function (eventId) { return memberBannerQueue.hasSeen(eventId); }
+  };
+  window.MemberBannerManager = MemberBannerManager;
+
+  function stageMemberBanners(roomId, events) {
+    state.pendingMemberBanners = {
+      roomId: String(roomId),
+      events: Array.isArray(events) ? events.slice() : []
+    };
+  }
+
+  function consumePendingMemberBanners() {
+    var pending = state.pendingMemberBanners;
+    if (!pending || pending.roomId !== state.roomId) return;
+    state.pendingMemberBanners = null;
+    MemberBannerManager.enqueueMany(pending.events);
+  }
 
   // ============================================================
   // API
@@ -163,6 +339,10 @@
       }
     });
 
+    socket.on('memberBanner', function (event) {
+      MemberBannerManager.enqueue(event);
+    });
+
     socket.on('propThrown', function (data) {
       playPropThrown(data);
     });
@@ -179,6 +359,8 @@
 
     socket.on('playerKicked', function (data) {
       if (data.roomId === state.roomId && data.kickedPlayerId === state.playerId) {
+        MemberBannerManager.clear('player-kicked');
+        state.pendingMemberBanners = null;
         showToast('你已被移出房间');
         leaveSocketRoom();
         navigate('/');
@@ -411,13 +593,22 @@
     var route = parseRoute();
     var prevPage = state.currentPage;
     var prevRoomId = state.roomId;
+    var prevHasRoomContext = prevPage === 'room' || prevPage === 'result';
+    var nextHasRoomContext = route.page === 'room' || route.page === 'result';
+    var preserveMemberBanners = prevHasRoomContext && nextHasRoomContext && route.roomId === prevRoomId;
     state.currentPage = route.page;
+
+    if (!preserveMemberBanners) MemberBannerManager.clear('route-change');
+    if (!nextHasRoomContext || !state.pendingMemberBanners ||
+        state.pendingMemberBanners.roomId !== String(route.roomId || '')) {
+      state.pendingMemberBanners = null;
+    }
 
     if (prevPage === 'room' && (route.page !== 'room' || route.roomId !== prevRoomId)) {
       closePropMenu();
       clearPropAnimations();
-      leaveSocketRoom();
     }
+    if (prevHasRoomContext && !preserveMemberBanners) leaveSocketRoom();
 
     switch (route.page) {
       case 'room':
@@ -513,6 +704,7 @@
     }).then(function (result) {
       hideLoading();
       if (!result.ok) { showToast(result.message || '创建失败'); return; }
+      stageMemberBanners(result.roomId, result.memberBanners);
       navigate('/room/' + result.roomId + '/owner');
     }).catch(function () {
       hideLoading();
@@ -551,6 +743,7 @@
       if (result.spectating) {
         showToast('游戏进行中，你将观战本局', 3000);
       }
+      stageMemberBanners(roomId, result.memberBanners);
       navigate('/room/' + roomId);
     }).catch(function () {
       hideLoading();
@@ -565,6 +758,7 @@
   function initRoomPage() {
     $app().innerHTML = '<div class="room-page"><div style="text-align:center;padding-top:40px;color:#9ca3af">加载中...</div></div>';
     joinSocketRoom(state.roomId);
+    consumePendingMemberBanners();
     fetchRoom();
   }
 
@@ -640,6 +834,7 @@
       }
       joinSocketRoom(joiningRoomId);
       updateRoomView(result.room);
+      MemberBannerManager.enqueueMany(result.memberBanners);
     }).catch(function () {
       hideLoading();
       if (state.currentPage !== 'room' || state.roomId !== joiningRoomId) return;
@@ -668,6 +863,9 @@
 
     var players = (room.players || []).map(function (p) {
       return Object.assign({}, p, {
+        memberLevel: p.memberLevel || null,
+        bannerTheme: p.bannerTheme || null,
+        privilegeFlags: Array.isArray(p.privilegeFlags) ? p.privilegeFlags : [],
         hasDealt: p.hasDealt === true,
         card: p.card || null,
         bet: p.bet != null ? p.bet : null,

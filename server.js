@@ -2,10 +2,19 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const { loadMemberProfiles, applyMemberProfile } = require('./member-banner-core');
+const { createMemberBannerEvents } = require('./member-banner-events');
+
+const memberProfiles = loadMemberProfiles(process.env.MEMBER_PROFILES_JSON, console.warn);
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const memberBannerEvents = createMemberBannerEvents({
+  emit: function (roomId, event) {
+    io.to(`room:${roomId}`).emit('memberBanner', event);
+  }
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -170,6 +179,9 @@ function sanitizeRoom(room) {
       openId: p.openId,
       nickName: p.nickName,
       avatarUrl: p.avatarUrl,
+      memberLevel: p.memberLevel || null,
+      bannerTheme: p.bannerTheme || null,
+      privilegeFlags: Array.isArray(p.privilegeFlags) ? p.privilegeFlags : [],
       hasDealt: p.hasDealt,
       card: p.card,
       bet: p.bet,
@@ -189,6 +201,11 @@ function broadcastRoom(roomId) {
   }
 }
 
+function emitBankerBannerIfChanged(roomId, room, previousDealerId) {
+  const event = memberBannerEvents.buildBankerIfChanged(room, previousDealerId);
+  return memberBannerEvents.emitBatch(roomId, [event]);
+}
+
 function removePlayerFromRoom(room, playerId) {
   room.players = room.players.filter(p => p.openId !== playerId);
 }
@@ -204,6 +221,7 @@ function handleOfflineExpiry(roomId, playerId) {
   const isRoundPlayer = !p.spectating;
 
   if (status === 'waiting') {
+    const previousDealerId = room.dealerOpenId;
     removePlayerFromRoom(room, playerId);
     if (room.dealerOpenId === playerId && room.players.length > 0) {
       room.dealerOpenId = room.players[0].openId;
@@ -213,6 +231,7 @@ function handleOfflineExpiry(roomId, playerId) {
     }
     room.updatedAt = new Date();
     broadcastRoom(roomId);
+    emitBankerBannerIfChanged(roomId, room, previousDealerId);
     cleanupEmptyRoom(roomId);
     return;
   }
@@ -273,11 +292,15 @@ function autoOpenForDealer(room, roomId) {
   const targetOpenIds = roundPlayers.filter(p => p.openId !== room.dealerOpenId).map(p => p.openId);
   if (!targetOpenIds.length) return;
 
+  const previousDealerId = room.dealerOpenId;
   executeOpen(room, roomId, mode, targetOpenIds);
+  emitBankerBannerIfChanged(roomId, room, previousDealerId);
 }
 
 function autoResetRound(room, roomId) {
+  const previousDealerId = room.dealerOpenId;
   executeResetRound(room, roomId);
+  emitBankerBannerIfChanged(roomId, room, previousDealerId);
   io.to(`room:${roomId}`).emit('roundReset', { roomId });
 }
 
@@ -483,17 +506,22 @@ app.post('/api/createRoom', (req, res) => {
       deck,
       publicCard: null,
       roundResult: null,
-      players: [{
+      players: [applyMemberProfile({
         openId: playerId, nickName, avatarUrl,
         hasDealt: false, card: null, bet: null, score: 0,
         spectating: false, offline: false, autoBet: false, retainedCard: false
-      }],
+      }, memberProfiles)],
       createdAt: new Date(),
       updatedAt: new Date()
     };
 
     roomStore.set(roomId, room);
-    res.json({ ok: true, roomId, openId: playerId });
+    const owner = room.players[0];
+    const memberBanners = memberBannerEvents.sortBatch([
+      memberBannerEvents.build(roomId, owner, 'banker'),
+      memberBannerEvents.build(roomId, owner, 'join')
+    ]);
+    res.json({ ok: true, roomId, openId: playerId, memberBanners });
   } catch (err) {
     console.error('createRoom error:', err);
     res.json({ ok: false, code: 'CREATE_FAILED', message: err.message });
@@ -515,18 +543,23 @@ app.post('/api/joinRoom', (req, res) => {
     const idx = players.findIndex(p => p.openId === playerId);
     const isNewPlayer = idx === -1;
     const isGameInProgress = room.status !== 'waiting';
+    let memberBanners = [];
 
     if (isNewPlayer) {
-      players.push({
+      players.push(applyMemberProfile({
         openId: playerId, nickName, avatarUrl,
         hasDealt: false, card: null, bet: null, score: 0,
         spectating: isGameInProgress,
         offline: false, autoBet: false, retainedCard: false
-      });
+      }, memberProfiles));
+      memberBanners = memberBannerEvents.sortBatch([
+        memberBannerEvents.build(roomId, players[players.length - 1], 'join')
+      ]);
     } else {
       players[idx].nickName = nickName;
       players[idx].avatarUrl = avatarUrl;
       players[idx].offline = false;
+      applyMemberProfile(players[idx], memberProfiles);
       const timerKey = `${roomId}:${playerId}`;
       if (offlineTimers.has(timerKey)) {
         clearTimeout(offlineTimers.get(timerKey));
@@ -536,10 +569,12 @@ app.post('/api/joinRoom', (req, res) => {
 
     room.updatedAt = new Date();
     broadcastRoom(roomId);
+    memberBannerEvents.emitBatch(roomId, memberBanners);
     res.json({
       ok: true, openId: playerId,
       spectating: isNewPlayer && isGameInProgress,
-      room: sanitizeRoom(room)
+      room: sanitizeRoom(room),
+      memberBanners
     });
   } catch (err) {
     console.error('joinRoom error:', err);
@@ -653,6 +688,9 @@ app.post('/api/bet', (req, res) => {
     room.status = allBet ? 'opening' : 'betting';
     room.updatedAt = new Date();
     broadcastRoom(roomId);
+    memberBannerEvents.emitBatch(roomId, [
+      memberBannerEvents.buildBetIfAllowed(roomId, players[idx], betAmount)
+    ]);
     res.json({ ok: true, room: sanitizeRoom(room) });
   } catch (err) {
     console.error('bet error:', err);
@@ -692,7 +730,13 @@ app.post('/api/open', (req, res) => {
     }
     if (!targetOpenIds.length) return res.json({ ok: false, code: 'NO_TARGET', message: '请选择至少一位玩家' });
 
+    const openingPlayer = room.players.find(p => p.openId === playerId);
+    const previousDealerId = room.dealerOpenId;
     const roundResult = executeOpen(room, roomId, mode, targetOpenIds);
+    memberBannerEvents.emitBatch(roomId, [
+      memberBannerEvents.buildBankerIfChanged(room, previousDealerId),
+      memberBannerEvents.build(roomId, openingPlayer, 'open_card', { openMode: mode })
+    ]);
     res.json({ ok: true, roundResult });
   } catch (err) {
     console.error('open error:', err);
@@ -715,7 +759,9 @@ app.post('/api/resetRound', (req, res) => {
       return res.json({ ok: false, code: 'NOT_AUTHORIZED', message: '只有庄家或房主才能开始下一局' });
     }
 
+    const previousDealerId = room.dealerOpenId;
     const result = executeResetRound(room, roomId);
+    emitBankerBannerIfChanged(roomId, room, previousDealerId);
 
     io.to(`room:${roomId}`).emit('roundReset', { roomId });
 
@@ -754,6 +800,7 @@ app.post('/api/kickPlayer', async (req, res) => {
     const target = room.players.find(p => p.openId === targetPlayerId);
     if (!target) return res.json({ ok: false, code: 'PLAYER_NOT_FOUND', message: '目标玩家不在房间' });
 
+    const previousDealerId = room.dealerOpenId;
     const wasDealer = room.dealerOpenId === targetPlayerId;
 
     removePlayerFromRoom(room, targetPlayerId);
@@ -781,6 +828,7 @@ app.post('/api/kickPlayer', async (req, res) => {
 
     if (checkMinPlayers(room)) {
       broadcastRoom(roomId);
+      emitBankerBannerIfChanged(roomId, room, previousDealerId);
       return res.json({ ok: true, roundAborted: true, room: sanitizeRoom(room) });
     }
 
@@ -794,6 +842,7 @@ app.post('/api/kickPlayer', async (req, res) => {
 
     room.updatedAt = new Date();
     broadcastRoom(roomId);
+    emitBankerBannerIfChanged(roomId, room, previousDealerId);
     cleanupEmptyRoom(roomId);
     res.json({ ok: true, room: sanitizeRoom(room) });
   } catch (err) {
