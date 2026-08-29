@@ -223,6 +223,7 @@
     var G11 = '11. Socket.IO 连通';
     var G12 = '12. 玩家道具互动';
     var G13 = '13. VIP 会员横幅';
+    var G14 = '14. VIP 强牌结果特效';
 
     var t1_1 = register(G1, '创建房间');
     var t1_2 = register(G1, '玩家B加入');
@@ -282,6 +283,7 @@
     var t10_10 = register(G10, '西红柿命中效果 200');
     var t10_11 = register(G10, '西红柿飞溅效果 200');
     var t10_12 = register(G10, 'member-banner-queue.js 200');
+    var t10_13 = register(G10, 'result-member-highlight.js 200');
 
     var t11_1 = register(G11, 'Socket.IO 握手');
 
@@ -311,6 +313,12 @@
     var t13_6 = register(G13, 'VIP 主动开牌广播正确 openMode');
     var t13_7 = register(G13, '普通玩家成功下注和开牌均无横幅');
     var t13_8 = register(G13, '错误页面上下文不渲染横幅 DOM');
+
+    var t14_1 = register(G14, '仅会员同花顺/豹子命中特效');
+    var t14_2 = register(G14, '同花顺结果 DOM 与动画样式正确');
+    var t14_3 = register(G14, '豹子变体与普通玩家降级正确');
+    var t14_4 = register(G14, '公开预览页展示两种真实三牌效果');
+    var t14_5 = register(G14, '预览页支持重播与静态模式');
 
     updateUI();
 
@@ -617,6 +625,8 @@
       check(t10_11, s10_11 === 200, 'status=' + s10_11);
       var s10_12 = await ms(t10_12, function () { return httpGet('/member-banner-queue.js'); });
       check(t10_12, s10_12 === 200, 'status=' + s10_12);
+      var s10_13 = await ms(t10_13, function () { return httpGet('/result-member-highlight.js'); });
+      check(t10_13, s10_13 === 200, 'status=' + s10_13);
 
       // =============== G11: Socket.IO ===============
       var s11 = await ms(t11_1, function () { return httpGet('/socket.io/socket.io.js'); });
@@ -1250,6 +1260,167 @@
           'accepted=' + acceptedWrongContext + ' before=' + beforeBannerNodes + ' after=' + afterBannerNodes);
       } catch (contextErr) {
         check(t13_8, false, contextErr.message || String(contextErr));
+      }
+
+      // =============== G14: VIP 强牌结果特效 ===============
+      function createResultHighlightFixture(memberLevel, handType) {
+        var variant = window.ResultMemberHighlight.getResultMemberHighlightVariant(memberLevel, handType);
+        var root = document.createElement('div');
+        root.className = 'player-result-card';
+        root.setAttribute('data-player-id', 'result-highlight-test');
+        root.setAttribute('data-hand-type', String(handType));
+        root.style.cssText = 'position:fixed;left:-9999px;top:0;';
+        if (variant) {
+          root.setAttribute('data-member-highlight', variant);
+          root.innerHTML = '<div class="result-hand-highlight result-hand-highlight--' + variant + '">' +
+            '<span class="result-hand-highlight-particles" aria-hidden="true">✦</span>' +
+            '<div class="cards-row"></div></div>';
+        } else {
+          root.innerHTML = '<div class="cards-row"></div>';
+        }
+        document.body.appendChild(root);
+        return { root: root, variant: variant };
+      }
+
+      try {
+        var highlightMatrix = await ms(t14_1, function () {
+          var api = window.ResultMemberHighlight;
+          return Promise.resolve({
+            straightFlush: api.getResultMemberHighlightVariant('vip', 4),
+            threeOfAKind: api.getResultMemberHighlightVariant('svip', 5),
+            ordinary: api.getResultMemberHighlightVariant(null, 4),
+            otherHand: api.getResultMemberHighlightVariant('vip', 3)
+          });
+        });
+        check(t14_1,
+          highlightMatrix.straightFlush === 'straight-flush' &&
+          highlightMatrix.threeOfAKind === 'three-of-a-kind' &&
+          highlightMatrix.ordinary === null && highlightMatrix.otherHand === null,
+          brief(highlightMatrix));
+      } catch (highlightMatrixErr) {
+        check(t14_1, false, highlightMatrixErr.message || String(highlightMatrixErr));
+      }
+
+      var straightFlushFixture = null;
+      try {
+        var straightFlushDom = await ms(t14_2, function () {
+          straightFlushFixture = createResultHighlightFixture('vip', 4);
+          var highlight = straightFlushFixture.root.querySelector('.result-hand-highlight');
+          var particles = straightFlushFixture.root.querySelector('.result-hand-highlight-particles');
+          var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          var highlightStyle = window.getComputedStyle(highlight);
+          var particleStyle = window.getComputedStyle(particles);
+          return Promise.resolve({
+            variant: straightFlushFixture.variant,
+            dataValue: straightFlushFixture.root.getAttribute('data-member-highlight'),
+            hasModifier: highlight.classList.contains('result-hand-highlight--straight-flush'),
+            hasParticles: !!particles,
+            animationReady: reducedMotion
+              ? highlightStyle.animationName === 'none' && particleStyle.display === 'none'
+              : highlightStyle.animationName.indexOf('resultHandHighlightReveal') !== -1 &&
+                particleStyle.animationName.indexOf('resultHandParticleBurst') !== -1
+          });
+        });
+        check(t14_2,
+          straightFlushDom.variant === 'straight-flush' &&
+          straightFlushDom.dataValue === 'straight-flush' &&
+          straightFlushDom.hasModifier && straightFlushDom.hasParticles && straightFlushDom.animationReady,
+          brief(straightFlushDom));
+      } catch (straightFlushErr) {
+        check(t14_2, false, straightFlushErr.message || String(straightFlushErr));
+      } finally {
+        if (straightFlushFixture && straightFlushFixture.root.parentNode) straightFlushFixture.root.remove();
+      }
+
+      var threeOfAKindFixture = null;
+      var ordinaryFixture = null;
+      try {
+        var variantDom = await ms(t14_3, function () {
+          threeOfAKindFixture = createResultHighlightFixture('vip', 5);
+          ordinaryFixture = createResultHighlightFixture(null, 4);
+          return Promise.resolve({
+            threeVariant: threeOfAKindFixture.variant,
+            threeModifier: !!threeOfAKindFixture.root.querySelector('.result-hand-highlight--three-of-a-kind'),
+            ordinaryVariant: ordinaryFixture.variant,
+            ordinaryHighlight: !!ordinaryFixture.root.querySelector('.result-hand-highlight'),
+            ordinaryData: ordinaryFixture.root.hasAttribute('data-member-highlight')
+          });
+        });
+        check(t14_3,
+          variantDom.threeVariant === 'three-of-a-kind' && variantDom.threeModifier &&
+          variantDom.ordinaryVariant === null && !variantDom.ordinaryHighlight && !variantDom.ordinaryData,
+          brief(variantDom));
+      } catch (variantDomErr) {
+        check(t14_3, false, variantDomErr.message || String(variantDomErr));
+      } finally {
+        if (threeOfAKindFixture && threeOfAKindFixture.root.parentNode) threeOfAKindFixture.root.remove();
+        if (ordinaryFixture && ordinaryFixture.root.parentNode) ordinaryFixture.root.remove();
+      }
+
+      var originalTestHash = window.location.hash;
+      try {
+        var previewRouteDom = await ms(t14_4, async function () {
+          window.location.hash = '/member-highlight-preview';
+          await delay(30);
+          var preview = document.querySelector('.member-highlight-preview');
+          var groups = preview ? Array.from(preview.querySelectorAll('.member-highlight-preview-card')) : [];
+          return {
+            hasPreview: !!preview,
+            denied: !!document.querySelector('.test-denied'),
+            straightFlush: !!document.querySelector('.result-hand-highlight--straight-flush'),
+            threeOfAKind: !!document.querySelector('.result-hand-highlight--three-of-a-kind'),
+            particleLayers: document.querySelectorAll('.result-hand-highlight-particles').length,
+            cardCounts: groups.map(function (group) { return group.querySelectorAll('.card-with-label').length; }),
+            labels: groups.map(function (group) {
+              return Array.from(group.querySelectorAll('.card-label-mini')).map(function (label) {
+                return label.textContent;
+              }).join('/');
+            })
+          };
+        });
+        check(t14_4,
+          previewRouteDom.hasPreview && !previewRouteDom.denied &&
+          previewRouteDom.straightFlush && previewRouteDom.threeOfAKind &&
+          previewRouteDom.particleLayers === 2 &&
+          previewRouteDom.cardCounts.length === 2 && previewRouteDom.cardCounts.every(function (count) { return count === 3; }) &&
+          previewRouteDom.labels.every(function (labels) { return labels === '公/手/万能'; }),
+          brief(previewRouteDom));
+
+        var previewControls = await ms(t14_5, async function () {
+          var before = document.querySelector('.result-hand-highlight--straight-flush');
+          window.App.replayMemberHighlightPreview();
+          var afterReplay = document.querySelector('.result-hand-highlight--straight-flush');
+          window.App.toggleMemberHighlightPreviewReducedMotion(true);
+          var preview = document.querySelector('.member-highlight-preview');
+          var afterStatic = document.querySelector('.result-hand-highlight--straight-flush');
+          var particles = document.querySelector('.result-hand-highlight-particles');
+          var pokerCard = document.querySelector('.member-highlight-preview .poker-card');
+          var checkbox = document.getElementById('member-highlight-preview-motion');
+          return {
+            nodeReplaced: !!before && !!afterReplay && before !== afterReplay && !before.isConnected,
+            reducedAttribute: preview && preview.getAttribute('data-reduced-motion'),
+            animationName: afterStatic && window.getComputedStyle(afterStatic).animationName,
+            particleDisplay: particles && window.getComputedStyle(particles).display,
+            cardAnimationName: pokerCard && window.getComputedStyle(pokerCard).animationName,
+            checkboxChecked: !!(checkbox && checkbox.checked)
+          };
+        });
+        check(t14_5,
+          previewControls.nodeReplaced && previewControls.reducedAttribute === 'true' &&
+          previewControls.animationName === 'none' && previewControls.particleDisplay === 'none' &&
+          previewControls.cardAnimationName === 'none' && previewControls.checkboxChecked,
+          brief(previewControls));
+      } catch (previewErr) {
+        if (t14_4.status === 'running' || t14_4.status === 'pending') {
+          check(t14_4, false, previewErr.message || String(previewErr));
+        }
+        if (t14_5.status === 'running' || t14_5.status === 'pending') {
+          check(t14_5, false, previewErr.message || String(previewErr));
+        }
+      } finally {
+        window.location.hash = originalTestHash || ('/test?key=' + encodeURIComponent(testKey));
+        await delay(30);
+        updateUI();
       }
 
       try {

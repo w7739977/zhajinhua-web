@@ -586,6 +586,9 @@
     if (parts[0] === 'test') {
       return { page: 'test' };
     }
+    if (parts[0] === 'member-highlight-preview') {
+      return { page: 'member-highlight-preview' };
+    }
     return { page: 'lobby' };
   }
 
@@ -625,6 +628,9 @@
         break;
       case 'test':
         initTestPage();
+        break;
+      case 'member-highlight-preview':
+        initMemberHighlightPreviewPage();
         break;
       default:
         initLobbyPage();
@@ -1386,34 +1392,65 @@
     renderResult();
   }
 
+  function renderResultCards(cards, memberHighlightVariant) {
+    var html = '';
+    if (memberHighlightVariant) {
+      html += '<div class="result-hand-highlight result-hand-highlight--' + escHtml(memberHighlightVariant) + '">';
+      html += '<span class="result-hand-highlight-particles" aria-hidden="true">✦</span>';
+    }
+
+    html += '<div class="cards-row">';
+    cards.forEach(function (c) {
+      html += '<div class="card-with-label"><span class="card-label-mini">' + escHtml(c.label) + '</span>';
+      html += '<div class="poker-card"><span class="poker-card-text ' + c.colorClass + '">' + escHtml(c.text) + '</span></div></div>';
+    });
+    html += '</div>';
+
+    if (memberHighlightVariant) html += '</div>';
+    return html;
+  }
+
   function renderResult() {
     var rr = state.roundResult;
     var allPlayers = state.roomPlayers || [];
     if (!rr) return;
+
+    var playersByOpenId = Object.create(null);
+    allPlayers.forEach(function (player) {
+      playersByOpenId[player.openId] = player;
+    });
 
     var publicCard = rr.publicCard || null;
     var dealerFullLoss = !!rr.dealerFullLoss;
     var isDealer = state.playerId === rr.dealerOpenId || state.playerId === (state.room && state.room.dealerOpenId);
     var isOwner = state.isOwner || (state.room && state.room.ownerOpenId === state.playerId);
 
-    var dealerPlayer = allPlayers.find(function (p) { return p.openId === rr.dealerOpenId; });
+    var dealerPlayer = playersByOpenId[rr.dealerOpenId];
     var dealerCards = [
       { text: publicCard, label: '公', colorClass: getCardColorClass(publicCard) },
       { text: rr.dealerHandCard, label: '手', colorClass: getCardColorClass(rr.dealerHandCard) },
       { text: rr.dealerWildCard, label: '万能', colorClass: getCardColorClass(rr.dealerWildCard) }
     ];
 
+    var dealerMemberLevel = dealerPlayer && dealerPlayer.memberLevel;
     var dealer = {
+      openId: rr.dealerOpenId,
       nickName: rr.dealerNickName || (dealerPlayer && dealerPlayer.nickName) || '庄家',
+      handType: rr.dealerHandType,
       handTypeName: rr.dealerHandTypeName,
       cards: dealerCards,
       drinks: rr.dealerDrinks || 0,
       totalScore: dealerPlayer ? dealerPlayer.score || 0 : 0,
-      fullLoss: dealerFullLoss
+      fullLoss: dealerFullLoss,
+      memberLevel: dealerMemberLevel,
+      memberHighlightVariant: window.ResultMemberHighlight.getResultMemberHighlightVariant(
+        dealerMemberLevel,
+        rr.dealerHandType
+      )
     };
 
     var playerResults = (rr.playerResults || []).map(function (pr) {
-      var p = allPlayers.find(function (x) { return x.openId === pr.openId; });
+      var p = playersByOpenId[pr.openId];
       var cards = [
         { text: publicCard, label: '公', colorClass: getCardColorClass(publicCard) },
         { text: pr.handCard, label: '手', colorClass: getCardColorClass(pr.handCard) },
@@ -1428,16 +1465,23 @@
       else if (pr.result === 'playerWin') { resultText = '玩家赢'; resultClass = 'result-win'; }
       else { resultText = '平局'; resultClass = 'result-tie'; }
 
+      var memberLevel = p && p.memberLevel;
       return {
         openId: pr.openId,
         nickName: pr.nickName || (p && p.nickName) || '玩家',
         cards: cards,
+        handType: pr.handType,
         handTypeName: pr.handTypeName,
         resultText: resultText,
         resultClass: resultClass,
         bet: pr.bet,
         drinks: pr.playerDrinks || 0,
-        totalScore: p ? p.score || 0 : 0
+        totalScore: p ? p.score || 0 : 0,
+        memberLevel: memberLevel,
+        memberHighlightVariant: window.ResultMemberHighlight.getResultMemberHighlightVariant(
+          memberLevel,
+          pr.handType
+        )
       };
     });
 
@@ -1455,7 +1499,12 @@
     if (dealerFullLoss) html += '<div class="dealer-loss-tip">💥 庄家全开输了，所有注码合计记庄家喝酒</div>';
 
     // Dealer section
-    html += '<div class="dealer-section ' + (dealerFullLoss ? 'dealer-section-loss' : '') + '">';
+    html += '<div class="dealer-section ' + (dealerFullLoss ? 'dealer-section-loss' : '') + '"';
+    html += ' data-player-id="' + escHtml(dealer.openId) + '" data-hand-type="' + escHtml(dealer.handType) + '"';
+    if (dealer.memberHighlightVariant) {
+      html += ' data-member-highlight="' + escHtml(dealer.memberHighlightVariant) + '"';
+    }
+    html += '>';
     html += '<div class="section-title"><span class="section-title-icon">👑</span><span>庄家</span>';
     if (dealer.fullLoss) html += '<span class="dealer-loss-badge">庄家输</span>';
     html += '</div>';
@@ -1466,12 +1515,7 @@
     html += '<div class="player-info"><span class="player-name">' + escHtml(dealer.nickName) + '</span>';
     html += '<span class="hand-type-tag">' + escHtml(dealer.handTypeName) + '</span></div></div>';
 
-    html += '<div class="cards-row">';
-    dealer.cards.forEach(function (c) {
-      html += '<div class="card-with-label"><span class="card-label-mini">' + escHtml(c.label) + '</span>';
-      html += '<div class="poker-card"><span class="poker-card-text ' + c.colorClass + '">' + escHtml(c.text) + '</span></div></div>';
-    });
-    html += '</div>';
+    html += renderResultCards(dealer.cards, dealer.memberHighlightVariant);
 
     html += '<div class="score-change-row">';
     if (dealer.drinks > 0) html += '<span class="drinks-tag">🍺 喝 ' + dealer.drinks + ' 杯</span>';
@@ -1482,19 +1526,19 @@
     // Player results
     html += '<div class="players-section"><div class="section-title"><span>对比结果</span></div>';
     playerResults.forEach(function (pr) {
-      html += '<div class="player-result-card">';
+      html += '<div class="player-result-card" data-player-id="' + escHtml(pr.openId) + '"';
+      html += ' data-hand-type="' + escHtml(pr.handType) + '"';
+      if (pr.memberHighlightVariant) {
+        html += ' data-member-highlight="' + escHtml(pr.memberHighlightVariant) + '"';
+      }
+      html += '>';
       html += '<div class="result-badge ' + pr.resultClass + '">' + escHtml(pr.resultText) + '</div>';
       html += '<div class="player-left">';
       html += renderAvatar(pr.nickName, 36, '');
       html += '<div class="player-info"><span class="player-name">' + escHtml(pr.nickName) + '</span>';
       html += '<span class="hand-type-tag">' + escHtml(pr.handTypeName) + '</span></div></div>';
 
-      html += '<div class="cards-row">';
-      pr.cards.forEach(function (c) {
-        html += '<div class="card-with-label"><span class="card-label-mini">' + escHtml(c.label) + '</span>';
-        html += '<div class="poker-card"><span class="poker-card-text ' + c.colorClass + '">' + escHtml(c.text) + '</span></div></div>';
-      });
-      html += '</div>';
+      html += renderResultCards(pr.cards, pr.memberHighlightVariant);
 
       html += '<div class="settle-row">';
       html += '<span class="bet-info">注码：' + pr.bet + '</span>';
@@ -1537,6 +1581,87 @@
     state.roundResult = null;
     state.roomPlayers = [];
     navigate('/room/' + state.roomId + (state.isOwner ? '/owner' : ''));
+  };
+
+  // ============================================================
+  // Member Highlight Preview
+  // ============================================================
+
+  function createMemberHighlightPreviewCards(cardTexts) {
+    var labels = ['公', '手', '万能'];
+    return cardTexts.map(function (cardText, index) {
+      return {
+        text: cardText,
+        label: labels[index],
+        colorClass: getCardColorClass(cardText)
+      };
+    });
+  }
+
+  function initMemberHighlightPreviewPage() {
+    renderMemberHighlightPreview(false);
+  }
+
+  function renderMemberHighlightPreview(reducedMotion) {
+    var straightFlushVariant = window.ResultMemberHighlight.getResultMemberHighlightVariant('vip', 4);
+    var threeOfAKindVariant = window.ResultMemberHighlight.getResultMemberHighlightVariant('vip', 5);
+    var straightFlushCards = createMemberHighlightPreviewCards(['♥10', '♥J', '♥Q']);
+    var threeOfAKindCards = createMemberHighlightPreviewCards(['♠A', '♥A', '♦A']);
+    var systemReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    var html = '<div class="result-page member-highlight-preview"';
+    if (reducedMotion) html += ' data-reduced-motion="true"';
+    html += '>';
+    html += '<div class="member-highlight-preview-shell">';
+    html += '<div class="member-highlight-preview-header">';
+    html += '<span class="member-highlight-preview-kicker">VIP RESULT EFFECTS</span>';
+    html += '<h1>会员强牌效果预览</h1>';
+    html += '<p>无需开房，直接查看同花顺与豹子在结果页中的环绕高亮和爆炸粒子。</p>';
+    html += '</div>';
+
+    html += '<div class="member-highlight-preview-showcase">';
+    html += '<section class="member-highlight-preview-card" data-member-highlight="' + escHtml(straightFlushVariant) + '">';
+    html += '<div class="member-highlight-preview-card-heading"><span class="member-highlight-preview-icon">♛</span>';
+    html += '<div><h2>同花顺</h2><span>香槟白金高亮</span></div></div>';
+    html += renderResultCards(straightFlushCards, straightFlushVariant);
+    html += '</section>';
+
+    html += '<section class="member-highlight-preview-card" data-member-highlight="' + escHtml(threeOfAKindVariant) + '">';
+    html += '<div class="member-highlight-preview-card-heading"><span class="member-highlight-preview-icon">♛</span>';
+    html += '<div><h2>豹子</h2><span>琥珀铜金高亮</span></div></div>';
+    html += renderResultCards(threeOfAKindCards, threeOfAKindVariant);
+    html += '</section>';
+    html += '</div>';
+
+    html += '<div class="member-highlight-preview-controls">';
+    html += '<button class="btn btn-primary member-highlight-preview-button" onclick="App.replayMemberHighlightPreview()">✨ 重播粒子</button>';
+    html += '<label class="member-highlight-preview-motion-toggle">';
+    html += '<input type="checkbox" id="member-highlight-preview-motion" onchange="App.toggleMemberHighlightPreviewReducedMotion(this.checked)"' + (reducedMotion ? ' checked' : '') + '>';
+    html += '<span><strong>模拟减少动态效果</strong><small>关闭流光和粒子，仅保留静态金色高亮</small></span>';
+    html += '</label>';
+    html += '<button class="btn btn-secondary member-highlight-preview-button" onclick="App.backToLobbyFromMemberHighlightPreview()">返回大厅</button>';
+    html += '</div>';
+
+    if (systemReducedMotion) {
+      html += '<div class="member-highlight-preview-system-note">系统已开启“减少动态效果”，动画将始终保持静态。</div>';
+    }
+    html += '<div class="member-highlight-preview-footnote">此页面只展示前端视觉，不会创建房间或修改任何牌局数据。</div>';
+    html += '</div></div>';
+    $app().innerHTML = html;
+  }
+
+  App.replayMemberHighlightPreview = function () {
+    var preview = $('.member-highlight-preview');
+    var reducedMotion = !!(preview && preview.getAttribute('data-reduced-motion') === 'true');
+    renderMemberHighlightPreview(reducedMotion);
+  };
+
+  App.toggleMemberHighlightPreviewReducedMotion = function (checked) {
+    renderMemberHighlightPreview(!!checked);
+  };
+
+  App.backToLobbyFromMemberHighlightPreview = function () {
+    navigate('/');
   };
 
   // ============================================================

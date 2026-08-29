@@ -42,14 +42,18 @@
 | `pages/result/result.wxss` | `public/style.css` → `/* Result Page */` 区块 | 结果页样式 |
 | `app.js` | `public/app.js` → 顶部 `state` 对象 | 全局状态 |
 | — | `public/member-banner-queue.js` + `public/app.js` → `MemberBannerManager` | VIP 横幅队列、去重、跨 room/result 播放与上下文清理（Web 独有） |
+| — | `public/result-member-highlight.js` + `public/app.js` → `renderResultCards()` | 会员同花顺/豹子结果高亮资格与局部牌组结构（Web 独有，不改 RoundResult） |
+| — | `public/app.js` → `/#/member-highlight-preview` / `initMemberHighlightPreviewPage()` | 公开强牌效果预览、粒子重播与手动静态模式（Web 独有，不访问房间 API） |
 | `app.wxss` | `public/style.css` → 顶部全局样式 | 全局样式 |
 | — | `public/style.css` → `.member-banner-*` | 赌场盛典黑金横幅、移动端和 reduced-motion（Web 独有） |
+| — | `public/style.css` → `.result-hand-highlight*` / `.member-highlight-preview*` | 会员强牌环绕、一次性粒子、公开预览布局和 reduced-motion 静态降级（Web 独有） |
 
 ### 测试文件（Web 独有）
 
 | Web 版文件 | 说明 |
 |---|---|
-| `public/test-runner.js` | 部署后自动化测试运行器（75 项用例，含真实 Socket 道具互动、VIP 横幅顺序/冷却/eventId 与无额外 roomUpdate 验证） |
+| `public/test-runner.js` | 部署后自动化测试运行器（81 项用例，含真实 Socket 道具互动、VIP 横幅、会员强牌结果/公开预览/重播/静态模式与无额外 roomUpdate 验证） |
+| `test/result-member-highlight.test.js` | 会员同花顺/豹子结果高亮资格纯函数单元测试 |
 | `test/member-banner-core.test.js` | 会员配置、权限、统一 payload、文案和优先级单元测试 |
 | `test/member-banner-events.test.js` | eventId、庄家变化、8 秒下注冷却和广播排序单元测试 |
 | `test/member-banner-queue.test.js` | 客户端队列、容量、淘汰和 100 个 eventId 去重单元测试 |
@@ -257,6 +261,7 @@ CSS 类名两版保持一致，便于视觉联动调整：
 | 选人高亮 | `.player-selected` |
 | 道具互动 | `.prop-avatar-target`, `.prop-menu-*`, `.prop-projectile`, `.prop-impact`, `.prop-splat` |
 | VIP 横幅（Web-only） | `.member-banner-layer`, `.member-banner-*` |
+| VIP 强牌结果特效（Web-only） | `.result-hand-highlight`, `.result-hand-highlight--straight-flush`, `.result-hand-highlight--three-of-a-kind` |
 | 下注筹码 | `.bet-chip`, `.bet-picker`, `.bet-label` |
 | 状态标签 | `.deal-tag`, `.bet-tag`, `.score-tag`, `.mock-tag` |
 | 结果标签 | `.result-win`, `.result-lose`, `.result-tie`, `.result-neutral` |
@@ -279,6 +284,6 @@ CSS 类名两版保持一致，便于视觉联动调整：
 - [ ] 新增瞬时 Socket 事件 → 记录事件名、身份边界、是否写 `room` / 触发 `roomUpdate`，并明确小程序是否同步
 - [ ] 新增页面/功能 → 两边同时新增对应文件/路由/模板
 
-> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能（仅房主、任意时刻、踢中庄家自动迁移）、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）**、**鸡蛋/西红柿瞬时互动（`throwProp` / `propThrown`）**、**VIP 会员横幅（`memberBanner`）** 目前仅 Web 版实现。道具与会员横幅都不属于两端共享房间历史；小程序版如需对齐，需单独设计可信会员数据源、实时协议与动画方案。
+> **注意**：在线状态追踪、离线托管、中途观战、保留手牌、踢人功能（仅房主、任意时刻、踢中庄家自动迁移）、部署后自动化测试、**邀请直链先入桌（`renderPendingJoin` + `joinRoomFromInvite`）**、**鸡蛋/西红柿瞬时互动（`throwProp` / `propThrown`）**、**VIP 会员横幅（`memberBanner`）**、**会员同花顺/豹子结果特效（`result-member-highlight.js`）** 目前仅 Web 版实现。道具、会员横幅与会员强牌特效都不属于两端共享房间历史；强牌特效只关联现有 `handType` 与 Web-only `memberLevel`，不修改 `RoundResult`；公开预览路由仅使用固定牌面和现有 CSS，不访问 Room/API。小程序版如需对齐，需单独设计可信会员数据源、实时协议与动画方案。
 >
 > **牌组**：Web 版已在 `executeResetRound` 实现 **全开全胜过庄（`passDealer`）后必洗 52 张**；小程序 `resetRound` 云函数若规则一致，须在 `passDealer` 时同样整副洗牌并清空本局手牌，避免与 Web 行为不一致。
